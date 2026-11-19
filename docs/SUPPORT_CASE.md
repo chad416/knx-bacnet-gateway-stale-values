@@ -40,23 +40,30 @@ not renew them, with unconfirmed notifications.
    The objects exist and the BMS's subscriptions are valid on its side. So the gateway no
    longer had the subscriptions.
 
-**Root cause.** The gateway's COV settings were saved at about t = 7018 s. On this
-controller, saving the COV settings cancels all existing COV subscriptions and resets the
-priority arrays of all objects. Your BMS subscribes once with an unlimited lifetime and
-never renews, so it was never told and has shown frozen values since. A restart of the
-gateway would have had the same effect; the gateway's uptime would tell the two apart.
+**Root cause.** The gateway's COV settings were saved at about t = 7018 s. The controller's
+user guide states that saving changed COV increments cancels all existing COV subscriptions,
+which "must be restarted from the client side", and also resets the priority arrays of all
+objects. Your BMS subscribes once with an unlimited lifetime and never renews, so it was
+never told and has shown frozen values since. A restart of the gateway would probably have
+had the same effect; the gateway's uptime would tell the two apart.
 
 **A second effect you may not have noticed.** At t = 6574 s the BMS wrote a setpoint of
-24.5 °C at priority 8 to "setpoint 16". The settings save cleared that command. The BMS's
-relinquish at t = 8103 s was acknowledged but had nothing to release. At t = 8852 s someone
-set 20.0 °C on the room panel, and that value is now in force. The BMS still shows 24.5 °C
-and believes its command holds.
+24.5 °C at priority 8 to "setpoint 16". The gateway writes KNX values into slot 9, so the
+command was in force and was sent to the room. The settings save cleared the command. From
+then on the gateway showed 22.0 °C for this point: the value it had when the BMS first read
+it at commissioning, which the gateway keeps as Relinquish_Default and never updates. The
+room itself still ran 24.5 °C, and the BMS still showed 24.5 °C. For about 31 minutes the
+three disagreed. The BMS's relinquish at t = 8103 s was acknowledged but had nothing to
+release. At t = 8852 s someone set 20.0 °C on the room panel, and from then on the gateway
+followed the panel again (20.0 °C at the end of the window). The BMS still shows 24.5 °C and
+believes its command holds.
 
 **Fix.**
 
 1. Now: make the BMS subscribe again (restart its BACnet driver or re-add the device). It
    gets the current value of every point at once.
-2. Re-send any BMS commands that should be active.
+2. Re-send any BMS commands that should be active. Until then, a point whose room panel has
+   not been touched since the save shows its commissioning value on the gateway.
 3. Permanently: set the BMS to renew COV subscriptions with a finite lifetime, renewed every
    300 to 900 s. In our study this limits the stale time after such an event to 2.0 min on
    average at 300 s (6.4 min at 900 s), for 1.0 or 0.33 messages per second with 150
@@ -71,6 +78,8 @@ would check that the next KNX change of "temperature 01" reaches the BMS within 
 
 ---
 
-Note: simulated case. The behaviour of the settings save is an assumption about the
-modelled controller (DOSSIER A5), taken from product documentation that this repository
-does not name.
+Note: simulated case. The cancelled subscriptions, the reset of the priority arrays, the
+slot for KNX values and the frozen Relinquish_Default are stated in the controller's user
+guide (docs/SOURCES.md, G2 and G3). That the reset also empties the gateway's own slot, so
+that the commissioning value shows, is my reading of the guide (DOSSIER A5). Times are from
+`summary.json` key `support_case`.

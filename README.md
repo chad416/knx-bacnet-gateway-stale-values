@@ -7,10 +7,13 @@ change-of-value setting costs.
 ## In plain words
 
 - A building computer reads room values from KNX through a small gateway that speaks BACnet.
-- When a value looks old or is missing, ten different mistakes can be the cause.
-- Looking only at the value history, the right cause comes first in about 59 % of cases.
-- Two cheap extra checks, the gateway's object list and the client's settings, raise that to 99 %.
+- When a value looks old or is missing, twelve different mistakes can be the cause.
+- Looking only at the value history, the right cause comes first in about 65 % of cases.
+- Two cheap extra checks, the gateway's object list and the client's settings, raise that to 99.5 %.
 - The default "report when it changes by 1" hides almost every change of a room temperature.
+- A command from the building computer can hide later KNX changes, do nothing at all, or
+  bring back an old value. Which one depends on where the gateway puts KNX values in the
+  BACnet priority array.
 
 **Simulated study, no hardware.** No recording from a real installation was used. The server
 and client are modelled at object and service level from the sources in
@@ -27,14 +30,14 @@ does a change-of-value (COV) setting cost in missed changes against network traf
 
 ## The answer
 
-Tested on 1100 randomised virtual installations (100 per class: 10 injected faults and
+Tested on 1300 randomised virtual installations (100 per class: 12 injected faults and
 healthy), each watched for 4 h. The diagnosis engine sees one of four evidence levels:
 E1 the value history on the building system, E2 plus one direct ReadProperty of the
 complaint point, E3 plus the device's object list and the client's subscription or polling
 state, E4 plus the gateway's export configuration and a KNX group monitor recording.
 
 1. **The value history alone proves nothing, and two faults are identical in it.** At E1 the
-   right class is ranked first in 59 % of the runs on average and no verdict is certain.
+   right class is ranked first in 65 % of the runs on average and no verdict is certain.
    Subscriptions lost because someone saved the gateway's COV settings and subscriptions
    that expired because the client never renews look the same in 100 % of the runs: every
    point stops at one moment. A duplicate device instance looks healthy in 68 % of the
@@ -45,13 +48,14 @@ state, E4 plus the gateway's export configuration and a KNX group monitor record
    OBJECT / UNKNOWN_OBJECT. The object list shows a moved object under a new instance with
    its old name (group address changed: certain in 100 % at E3). One Who-Is that gets two
    I-Am answers proves a duplicate device (100 %). The client's own record proves an expired
-   lifetime (100 %), and the Priority_Array proves a command left in slot 8 (100 %). With E3
-   the right class is first in 99 % of the runs.
+   lifetime (100 %). The Priority_Array, read against the BMS's own command log, proves each
+   of the three command faults of finding 6. With E3 the right class is first in 99.5 % of
+   the runs.
 
 3. **Five faults need the gateway's configuration and a KNX monitor to be certain.** A
    missing export flag, a date or text object, an object above the 150-object limit, a
    too-coarse increment and subscriptions cancelled by a settings save are certain only at
-   E4. Over all levels the engine gave 1593 "certain" verdicts and 0 were wrong. With a 1 h
+   E4. Over all levels the engine gave 1989 "certain" verdicts and 0 were wrong. With a 1 h
    or an 8 h window it also made no wrong certain verdict.
 
 4. **The default increment of 1 is wrong in both directions.** On a room temperature that a
@@ -70,9 +74,29 @@ state, E4 plus the gateway's export configuration and a KNX group monitor record
    600 s. A switch polled every 60 s still loses 4 % of its changes; COV loses none. After a
    save of the COV settings the values stay stale until the client renews: 2.0 min on
    average (longest 4.8 min) with a 300 s renewal, 12.8 min (29.7 min) with 1800 s, and for
-   good with lifetime 0 and no renewal. A BMS command reset by the save stays invisible to
-   the BMS for 3.1 min, 16.6 min and 210.1 min on average. **Renew every 300 to 900 s**: for
-   150 objects that costs 1.0 or 0.333 messages per second.
+   good with lifetime 0 and no renewal. The save also deletes every BMS command, and the
+   command stays lost until the BMS writes it again; the BMS still believes it holds for
+   3.1 min, 16.6 min and 210.1 min on average. **Renew every 300 to 900 s**: for 150 objects
+   that costs 1.0 or 0.333 messages per second. The guide says the save "resets the priority
+   array values of all objects". If that includes the slot the gateway writes KNX values to,
+   every object shows the value of its first read until its next KNX telegram: right after
+   the save 74 % of the objects are wrong on the gateway itself, for 23.8 min on average and
+   81.9 min for a setpoint. A commanded setpoint shows its commissioning value for 47.2 min
+   on average while KNX still runs the command, and with a 300 s renewal that frozen value
+   is what the BMS gets at its first renewal in 100 % of the runs.
+
+6. **Where the gateway writes KNX values decides what a BMS command does.** The controller
+   writes KNX values into one configurable slot of the priority array, and sets
+   Relinquish_Default once, at the first read, never again (user guide). With the standard
+   rule that the lowest-numbered non-empty slot wins, there are three different faults. A
+   command above the gateway's slot masks every later KNX change until it is relinquished.
+   A command below it is acknowledged and never becomes the value. A command in the same slot
+   is overwritten by the next KNX telegram, and its relinquish empties the slot, so the
+   value falls back to the frozen first value. In the value history they look different (the
+   command stays, never appears, or the point returns to its first value): ranked first at E1
+   in 100 %, 96 % and 99 % of the runs. The Priority_Array against the BMS command log makes
+   them certain at E3 in 100 %, 100 % and 96 %. **Rule for commissioning: read the gateway's
+   object priority and command from a slot with a lower number, never the same one.**
 
 ![Diagnosis by evidence level](results/diagnosis_by_evidence.png)
 
@@ -114,7 +138,8 @@ the test suite and CI run it.
 - Gateway BACnet server: export flag; binary to Binary Value, numeric to Analog Value,
   other types not exported; instance number = group address as a 16-bit number
   (1/1/1 is 2305, from factors 2048, 256 and 1); export limit 150 for the small variant;
-  commandable Present_Value with 16 priority levels and Relinquish_Default; per-object COV
+  commandable Present_Value with 16 priority levels; KNX values written into one
+  configurable slot; Relinquish_Default set at the first read and frozen; per-object COV
   increment, default 1; subscriptions with lifetime, renewal and an immediate notification;
   at most 256 subscriptions; saving the COV settings cancels all subscriptions and resets
   all priority arrays.
@@ -124,14 +149,20 @@ the test suite and CI run it.
 - Client: binds the device by the last I-Am it heard, then polls every point or subscribes
   and renews (or never renews); keeps a value history, a fault flag per point and a command
   log.
-- Ten faults: COV increment too coarse, subscriptions lost by a settings save, lifetime
+- Twelve faults: COV increment too coarse, subscriptions lost by a settings save, lifetime
   expired, export flag missing, type not exportable, over the export limit, group address
-  changed, BMS command left in priority 8, duplicate device instance, polling too slow.
+  changed, a BMS command that masks KNX, one that has no effect, one written into the
+  gateway's own KNX slot, duplicate device instance, polling too slow.
 
 ## What is not modelled
 
-- The byte encoding of BACnet messages, segmentation, BBMD and foreign devices, network
-  loss and delay, timeouts and retries. A message is a count.
+- The byte encoding of BACnet messages, segmentation, network loss and delay, timeouts and
+  retries. A message is a count.
+- Foreign-device registration with a BBMD, which the gateway offers with a lease time. If
+  the registration lapsed, for example because the BBMD restarted, the gateway's broadcasts
+  such as its I-Am would not reach the building system's network until the next
+  registration.
+- The "Overwritten flag" of the user guide (its meaning is unclear; open point O1 in the dossier).
 - KNX bus timing (see the sibling project on TP1), KNX telegrams lost on the bus.
 - Several faults at once, other BACnet clients writing to the gateway, a gateway restart
   (it would look like a COV settings save).
@@ -140,12 +171,19 @@ the test suite and CI run it.
 
 ## Limits and what I would do next with real hardware
 
-- The 150-object limit, the default increment of 1 and the save behaviour come from
-  product documentation that I could only read as research notes, not from a public page I
-  could open myself (docs/SOURCES.md). They are assumptions A1, A3 and A5 in the dossier.
-- What the gateway does with a KNX telegram while a BACnet command is held is not
-  documented (A4). If KNX simply overwrote the present value, the fault "command left in
-  priority 8" would not exist and other faults would be unchanged.
+- The export rules, the 150-object limit, the default increment of 1, the save behaviour
+  and the priority behaviour come from the controller's public user guide, quoted in
+  docs/SOURCES.md. The first version of this study modelled a KNX telegram as writing
+  Relinquish_Default. That was an assumption, the guide contradicts it, and it is
+  corrected.
+- Still assumed: the default slot for KNX values (A4), whether the reset at a save also
+  empties that slot (A5), what a BACnet write does on KNX (A16), how the instance number is
+  formed (A15), which objects drop out above the limit (A2). The bench tests that would
+  settle each one are in [docs/BENCH_TEST_PLAN.md](docs/BENCH_TEST_PLAN.md).
+- The guide explains the increment as "changes by more than 1"; the model reports at a
+  change of at least the increment. With the increment equal to the sensor step, the
+  stricter reading would report only 56 % of temperature changes (table T12). Open until
+  tested on a controller.
 - The signal statistics are assumptions. The COV-against-polling result moves with them:
   with half the temperature movement polling never misses more than COV with 0.2 K; with
   twice the movement it does from 900 s (table T10).
@@ -153,11 +191,9 @@ the test suite and CI run it.
   rules rest on premises (DOSSIER section 4) that a real installation can break.
 - The model check of the COV rule against the random-walk formula is within 3.1 % at
   0.1 K but 13.2 % off at 0.4 K, where few events are counted (table T9).
-- Next with hardware: a KNX controller with a BACnet/IP server, a BACnet client tool and a
-  KNX interface on a test board; create each fault on purpose, record the client's history,
-  the Who-Is answers, the object list and a group monitor, and run this engine on them;
-  measure the real default increment, the export limit and what a settings save does to
-  running subscriptions.
+- Next with hardware: run the bench test plan, then create each fault on purpose on a test
+  board, record the client's history, the Who-Is answers, the object list and a group
+  monitor, and run this engine on them.
 
 ## Repo map
 

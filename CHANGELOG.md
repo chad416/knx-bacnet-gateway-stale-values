@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.0 - 2026-11-19
+
+The modelled controller now follows its own public user guide (docs/SOURCES.md, G1 to G3).
+
+- **Priority behaviour corrected.** Version 0.1.0 modelled a KNX telegram as writing
+  Relinquish_Default (assumption A4). That was an assumption, and the user guide
+  contradicts it: the controller writes KNX values into one configurable slot of the
+  priority array, and Relinquish_Default is set once, at the first read, and cannot be
+  changed afterwards. The model now does this.
+- The class "BMS command left in priority 8" is split into the three cases that are really
+  different: a command above the gateway's slot masks KNX, one below it has no effect, one
+  in the same slot is overwritten by KNX and its relinquish brings back the frozen first
+  value. The engine reads each from the Priority_Array against the BMS command log (E3) and
+  from the gateway's object priority setting (E4). 13 classes instead of 11.
+- The settings-save study now reports that the save deletes every BMS command for good,
+  what the BMS gets at its first renewal, and how long the gateway itself shows the frozen
+  first value (new table T11).
+- Promoted from assumption to documented: the export rules and limits (A1), the default COV
+  increment (A3), the cancelled subscriptions and reset priority arrays on a save (A5),
+  the unique device ID and the default port.
+- Still assumptions, now with bench tests in docs/BENCH_TEST_PLAN.md: the default slot (A4),
+  whether the reset empties the gateway's own slot (A5), what a BACnet write does on KNX
+  (A16), the instance formula (A15), which objects drop out above the limit (A2).
+- New open points from the guide: the "Overwritten flag" (O1) and the wording "changes by
+  more than" the increment (O2, new table T12). No finding rests on either.
+- Foreign-device registration listed as not modelled.
+
+Unchanged: every recall and certainty number of the ten other classes, the COV sweeps, the
+traffic table and the stale times after a save. Changed means: E1 59 % to 65 %, E2 68 % to
+73 %, E3 99 % to 99.5 %, certain verdicts 1593 to 1989, still 0 wrong.
+
+Change made during development that altered results:
+
+- The first E3 rule called a held command "masks KNX, certain" whenever no slot above it was
+  in use. With a 1 h window, a command in the gateway's own slot whose relinquish fell after
+  the window end was called that way: 14 wrong certain verdicts. The rule now requires a
+  used slot below the command (the gateway's slot) for "certain"; with no other slot in use
+  it says "same slot, likely".
+
 ## 0.1.0 - 2026-11-19
 
 First complete version.
