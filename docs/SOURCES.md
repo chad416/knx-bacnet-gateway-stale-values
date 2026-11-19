@@ -17,27 +17,85 @@ reference names it.
 | B6 | Same reference: *BACnet Device Instance* | https://docs.chipkin.com/protocols/bacnet/device-instance/ | Assignable device instances 0 to 4 194 302, 4 194 303 is the wildcard. Device instances must be unique across the internetwork; duplicates cause discovery confusion, wrong-device behaviour and intermittent failures. Clients tell devices apart by the instance in Who-Is / I-Am. |
 | B7 | Article *2 BACnet MS/TP devices with the same device ID* by the same gateway maker | https://store.chipkin.com/articles/2-bacnet-mstp-devices-with-the-same-device-id | The most recent I-Am or response replaces earlier bindings for the same device instance ("last one wins"); the client sees inconsistent values and unexpected bindings. The article is about MS/TP; the model applies the same binding rule on BACnet/IP (assumption A11). |
 | B8 | ANSI/ASHRAE Standard 135 *BACnet* | not read (paid standard) | Nothing taken directly. Cited only so the reader knows which document is authoritative for COV (clause 13), SubscribeCOV (13.14, per B5) and the priority mechanism. |
+| G | User guide of the modelled KNX logic controller, firmware 3.0: pages on BACnet settings, BACnet objects and BACnet COV settings | public online user guide of the controller's maker, read page by page in a browser | The sentences quoted under G1 to G3 below. The maker and the product are not named on purpose, so that this repository stays generic. The guide is public. |
 
-## Rules that rest only on the research notes or on my own assumption
+### What the user guide says (G1 to G3)
 
-The following could not be confirmed from an openly readable source. They come from a user
-guide of a controller built on the same platform, which this repository does not name, as it
-was summarised in my research notes, or they are my own choice. All are listed as
-assumptions in DOSSIER section 7.1, and each one that carries a finding is named there.
+The sentences below are copied word for word from the guide. Ids G1 to G3 are used in the
+code, the tests and the dossier.
 
-- **Export limit of 150 objects** for the small controller variant, and "no hard limit, 2000
-  or fewer recommended" for the larger one (A1). B1 confirms only the 2000 recommendation.
-- **Which objects are dropped above the limit** (A2). Not documented anywhere I found. The
-  model keeps the lowest instance numbers. The diagnosis rules do not depend on this choice.
-- **Default COV increment of 1** (A3). B1 says the increment is set per object but gives no
-  default.
-- **Saving the COV settings cancels all subscriptions and resets all priority arrays** (A5).
-  Not in B1. The mechanism (a service restart) is not documented either.
-- **"Other data types are not supported"** for export (date, time, text). B1 only says that
-  binary and numeric objects can be accessed, which implies the rest cannot.
-- **What a KNX telegram does while a BACnet command is held** (A4). Not stated in any
-  source. The model treats KNX values as Relinquish_Default.
-- Whether a change of exactly the increment reports. B2 uses `>=`; the standard text was
-  not read.
-- Signal statistics, object mix, window length and client behaviour (A6 to A12): my own
+**G1, exported objects and limits.**
+
+- "Selecting the Export checkbox makes the specific KNX object visible in BACnet as a BACnet
+  object. Binary objects appear as binary values, while numeric objects appear as analog
+  values. Other data types are not supported."
+- "BACnet Server | Up to 150 exported objects | *No limit (≤ 2000 recommended)", for the
+  small and the large controller.
+- "Performance testing was measured on HW3.0 when the object value change interval was set to
+  60 s. The recommended limit for HW1.x remains 500 objects."
+- The page on BACnet objects lists the objects with their parameters and offers them as a
+  CSV download. It says nothing about how an instance number is formed.
+
+**G2, BACnet settings.**
+
+- "Device ID: Ensure that the BACnet device ID is unique on the BACnet network."
+- "Object priority: Define the priority array to which the controller will write. The
+  controller writes to the Relinquish Default (RD) property by first reading (upload from
+  BMS) only. It takes the current value of the object. The value of the RD property cannot
+  be changed afterward. If an object read from the controller has a higher value than the RD
+  property, it raises the Overwritten flag."
+- "Port: Specify the BACnet port (default is 47808)."
+- "BBMD Configuration: Set the BACnet router IP (BBMD IP) and port (BBMD port). Configure the
+  BBMD lease time (seconds) for registration resend intervals."
+
+**G3, BACnet COV settings.**
+
+- "Each analog value that is active for COV subscription has a parameter called COV
+  increment. This parameter defines the minimal change of value (delta) that triggers a
+  value update on the client side. By default, the COV increment is set to 1. This means
+  that unless the value in the controller changes by more than 1, the client-side value
+  remains unchanged."
+- "If you modify the COV increment parameters ... and save the changes, all existing COV
+  subscriptions will be canceled. To resume COV subscriptions, they must be restarted from
+  the client side."
+- "IMPORTANT: Changing COV increment values also resets the priority array values of all
+  objects."
+
+**How I read G2 on the priority array.** "Define the priority array to which the controller
+will write" names one configurable slot of the 16-slot priority array; the controller writes
+each KNX value there. Relinquish_Default is written once, at the object's first read by a
+client, with the object's value at that moment, and never again. The last sentence, on the
+"Overwritten flag", is unclear as written: a "higher value" may mean a higher priority, so
+that the flag marks an object whose present value comes from a slot rather than from
+Relinquish_Default. I do not model the flag and no finding rests on it (open point O1 in
+DOSSIER section 7.1).
+
+**One wording difference.** G3 says the client value stays unchanged "unless the value in the
+controller changes by more than 1". B2 reports at a change of at least the increment (`>=`).
+The model keeps `>=`. The two differ for a change of exactly the increment. That case is
+common when the increment equals the sensor's send step, because a send-on-delta sensor
+mostly moves by exactly its step (table T12). The guide's sentence is an explanation, not a
+rule statement, so I keep it as open point O2 and do not change the model.
+
+## Rules that rest only on my own assumption
+
+The following are not stated in any source I read. All are listed in DOSSIER section 7.1,
+and each one that carries a finding is named there. The bench tests that would replace them
+are in [BENCH_TEST_PLAN.md](BENCH_TEST_PLAN.md).
+
+- **Which objects are dropped above the limit** (A2). The model keeps the lowest instance
+  numbers. The diagnosis rules do not depend on this choice.
+- **Which slot the controller writes KNX values to by default** (A4). G2 makes it a setting
+  and gives no default. The model draws it per installation.
+- **Whether the reset of G3 also empties the controller's own slot** (A5). G3 says "resets
+  the priority array values of all objects"; I read that as all 16 slots. If the controller
+  refilled its slot at once, the fallback to Relinquish_Default after a save would last no
+  time; the loss of BMS commands and subscriptions would be the same.
+- **How the instance number is formed** (A15). B1, the platform's public page, gives
+  X * 2048 + Y * 256 + Z; the guide pages I read do not. The model uses B1.
+- **What happens to a BACnet write on the KNX side** (A16). Not stated in G2. The model sends a
+  change of Present_Value caused by a BACnet write to the group address, and the sent value
+  becomes the controller's own KNX value, so it lands in the controller's slot.
+- Whether a change of exactly the increment reports (see the wording difference above).
+- Signal statistics, object mix, window length and client behaviour (A6 to A14): my own
   assumptions, with sensitivity runs where they decide a finding.
