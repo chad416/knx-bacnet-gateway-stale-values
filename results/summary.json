@@ -7,16 +7,27 @@
   "manual_operator_priority": 8,
   "export_limit_small": 150,
   "recommended_large": 2000,
+  "recommended_older_hardware": 500,
+  "recommendation_change_interval_s": 60,
   "object_counts": [
    150,
    500,
    2000
   ],
+  "bacnet_port_default": 47808,
+  "knx_priority_choices": [
+   9,
+   10,
+   12,
+   14,
+   16
+  ],
+  "bms_priority": 8,
   "default_cov_increment": 1,
   "poll_limit_s": 300,
   "max_subscriptions_default": 256,
-  "fault_classes": 10,
-  "classes_with_healthy": 11,
+  "fault_classes": 12,
+  "classes_with_healthy": 13,
   "instance_example": {
    "ga": "1/1/1",
    "instance": 2305,
@@ -60,7 +71,9 @@
    "TYPE_NOT_EXPORTABLE",
    "OVER_LIMIT",
    "GA_CHANGED",
-   "PRIORITY_STUCK",
+   "CMD_MASKS_KNX",
+   "CMD_NO_EFFECT",
+   "CMD_SAME_SLOT",
    "DUP_DEVICE",
    "POLL_TOO_SLOW"
   ],
@@ -107,8 +120,17 @@
      "HEALTHY": 34,
      "COV_INC_COARSE": 5
     },
-    "PRIORITY_STUCK": {
-     "PRIORITY_STUCK": 100
+    "CMD_MASKS_KNX": {
+     "CMD_MASKS_KNX": 100
+    },
+    "CMD_NO_EFFECT": {
+     "CMD_NO_EFFECT": 96,
+     "HEALTHY": 3,
+     "CMD_MASKS_KNX": 1
+    },
+    "CMD_SAME_SLOT": {
+     "CMD_SAME_SLOT": 99,
+     "HEALTHY": 1
     },
     "DUP_DEVICE": {
      "HEALTHY": 68,
@@ -149,8 +171,17 @@
     "GA_CHANGED": {
      "GA_CHANGED": 100
     },
-    "PRIORITY_STUCK": {
-     "PRIORITY_STUCK": 100
+    "CMD_MASKS_KNX": {
+     "CMD_MASKS_KNX": 100
+    },
+    "CMD_NO_EFFECT": {
+     "CMD_NO_EFFECT": 96,
+     "HEALTHY": 3,
+     "CMD_MASKS_KNX": 1
+    },
+    "CMD_SAME_SLOT": {
+     "CMD_SAME_SLOT": 99,
+     "HEALTHY": 1
     },
     "DUP_DEVICE": {
      "COV_LIFETIME_EXPIRED": 17,
@@ -190,8 +221,14 @@
     "GA_CHANGED": {
      "GA_CHANGED": 100
     },
-    "PRIORITY_STUCK": {
-     "PRIORITY_STUCK": 100
+    "CMD_MASKS_KNX": {
+     "CMD_MASKS_KNX": 100
+    },
+    "CMD_NO_EFFECT": {
+     "CMD_NO_EFFECT": 100
+    },
+    "CMD_SAME_SLOT": {
+     "CMD_SAME_SLOT": 100
     },
     "DUP_DEVICE": {
      "DUP_DEVICE": 100
@@ -225,8 +262,14 @@
     "GA_CHANGED": {
      "GA_CHANGED": 100
     },
-    "PRIORITY_STUCK": {
-     "PRIORITY_STUCK": 100
+    "CMD_MASKS_KNX": {
+     "CMD_MASKS_KNX": 100
+    },
+    "CMD_NO_EFFECT": {
+     "CMD_NO_EFFECT": 100
+    },
+    "CMD_SAME_SLOT": {
+     "CMD_SAME_SLOT": 100
     },
     "DUP_DEVICE": {
      "DUP_DEVICE": 100
@@ -246,7 +289,9 @@
     "TYPE_NOT_EXPORTABLE": 1.0,
     "OVER_LIMIT": 0.0,
     "GA_CHANGED": 0.61,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 0.96,
+    "CMD_SAME_SLOT": 0.99,
     "DUP_DEVICE": 0.0,
     "POLL_TOO_SLOW": 1.0
    },
@@ -259,7 +304,9 @@
     "TYPE_NOT_EXPORTABLE": 1.0,
     "OVER_LIMIT": 0.0,
     "GA_CHANGED": 1.0,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 0.96,
+    "CMD_SAME_SLOT": 0.99,
     "DUP_DEVICE": 0.14,
     "POLL_TOO_SLOW": 1.0
    },
@@ -272,7 +319,9 @@
     "TYPE_NOT_EXPORTABLE": 1.0,
     "OVER_LIMIT": 1.0,
     "GA_CHANGED": 1.0,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 1.0,
+    "CMD_SAME_SLOT": 1.0,
     "DUP_DEVICE": 1.0,
     "POLL_TOO_SLOW": 1.0
    },
@@ -285,7 +334,9 @@
     "TYPE_NOT_EXPORTABLE": 1.0,
     "OVER_LIMIT": 1.0,
     "GA_CHANGED": 1.0,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 1.0,
+    "CMD_SAME_SLOT": 1.0,
     "DUP_DEVICE": 1.0,
     "POLL_TOO_SLOW": 1.0
    }
@@ -300,7 +351,9 @@
     "TYPE_NOT_EXPORTABLE": 0.0,
     "OVER_LIMIT": 0.0,
     "GA_CHANGED": 0.0,
-    "PRIORITY_STUCK": 0.0,
+    "CMD_MASKS_KNX": 0.0,
+    "CMD_NO_EFFECT": 0.0,
+    "CMD_SAME_SLOT": 0.0,
     "DUP_DEVICE": 0.0,
     "POLL_TOO_SLOW": 0.0
    },
@@ -313,7 +366,9 @@
     "TYPE_NOT_EXPORTABLE": 0.0,
     "OVER_LIMIT": 0.0,
     "GA_CHANGED": 0.0,
-    "PRIORITY_STUCK": 0.0,
+    "CMD_MASKS_KNX": 0.0,
+    "CMD_NO_EFFECT": 0.0,
+    "CMD_SAME_SLOT": 0.0,
     "DUP_DEVICE": 0.0,
     "POLL_TOO_SLOW": 0.0
    },
@@ -326,7 +381,9 @@
     "TYPE_NOT_EXPORTABLE": 0.0,
     "OVER_LIMIT": 0.0,
     "GA_CHANGED": 1.0,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 1.0,
+    "CMD_SAME_SLOT": 0.96,
     "DUP_DEVICE": 1.0,
     "POLL_TOO_SLOW": 0.94
    },
@@ -339,7 +396,9 @@
     "TYPE_NOT_EXPORTABLE": 1.0,
     "OVER_LIMIT": 1.0,
     "GA_CHANGED": 1.0,
-    "PRIORITY_STUCK": 1.0,
+    "CMD_MASKS_KNX": 1.0,
+    "CMD_NO_EFFECT": 1.0,
+    "CMD_SAME_SLOT": 1.0,
     "DUP_DEVICE": 1.0,
     "POLL_TOO_SLOW": 1.0
    }
@@ -354,11 +413,11 @@
     "wrong": 0
    },
    "E3": {
-    "right": 494,
+    "right": 690,
     "wrong": 0
    },
    "E4": {
-    "right": 1099,
+    "right": 1299,
     "wrong": 0
    }
   },
@@ -390,9 +449,17 @@
     "E3": "object 'blind 01' is now analog-value 5722 (group address 2/6/90)",
     "E4": "object 'blind 01' is now analog-value 5722 (group address 2/6/90)"
    },
-   "PRIORITY_STUCK": {
-    "E3": "Priority_Array slot 8 holds 18.0, written by the BMS at t = 1854 s and never relinquished",
-    "E4": "Priority_Array slot 8 holds 18.0, written by the BMS at t = 1854 s and never relinquished"
+   "CMD_MASKS_KNX": {
+    "E3": "Priority_Array slot 8 holds 24.5, written by the BMS at t = 5481 s and never relinquished; slot 10 below it holds 20.5, the controller's KNX slot",
+    "E4": "Priority_Array slot 8 holds 24.5, written by the BMS at t = 5481 s and never relinquished; slot 10 below it holds 20.5, the controller's KNX slot"
+   },
+   "CMD_NO_EFFECT": {
+    "E3": "Priority_Array slot 14 holds the BMS command 18.5, but slot 8 holds 19.5, which the BMS did not write: the controller's KNX slot is above the command, so the command never becomes the value",
+    "E4": "the controller's object priority is 8; the BMS commands at 14, a lower priority, so its command never wins"
+   },
+   "CMD_SAME_SLOT": {
+    "E3": "Priority_Array slot 12 holds 20.0, but the BMS last relinquished it there at t = 4610 s: the controller writes its KNX values into the BMS's own slot (Relinquish_Default 20.0)",
+    "E4": "the controller's object priority is 12, the slot the BMS commands: KNX values and BMS commands overwrite each other, and a relinquish empties the controller's slot"
    },
    "DUP_DEVICE": {
     "E3": "2 devices answer Who-Is with device instance 30639: ['192.168.1.20:47808', '192.168.1.31:47808']",
@@ -404,6 +471,12 @@
    }
   },
   "client_mode": {
+   "CMD_MASKS_KNX|cov": 73,
+   "CMD_MASKS_KNX|poll": 27,
+   "CMD_NO_EFFECT|cov": 64,
+   "CMD_NO_EFFECT|poll": 36,
+   "CMD_SAME_SLOT|cov": 58,
+   "CMD_SAME_SLOT|poll": 42,
    "COV_INC_COARSE|cov": 100,
    "COV_LIFETIME_EXPIRED|cov": 100,
    "COV_SUB_LOST_SAVE|cov": 100,
@@ -418,18 +491,16 @@
    "OVER_LIMIT|cov": 57,
    "OVER_LIMIT|poll": 43,
    "POLL_TOO_SLOW|poll": 100,
-   "PRIORITY_STUCK|cov": 60,
-   "PRIORITY_STUCK|poll": 40,
    "TYPE_NOT_EXPORTABLE|cov": 59,
    "TYPE_NOT_EXPORTABLE|poll": 41
   },
   "mean_recall": {
-   "E1": 0.5918,
-   "E2": 0.6818,
-   "E3": 0.9945,
+   "E1": 0.6508,
+   "E2": 0.7269,
+   "E3": 0.9954,
    "E4": 1.0
   },
-  "installations": 1100,
+  "installations": 1300,
   "lookalikes": {
    "E1": [
     [
@@ -519,7 +590,7 @@
    "E4": []
   },
   "certain_total": {
-   "right": 1593,
+   "right": 1989,
    "wrong": 0
   },
   "descriptions": {
@@ -531,7 +602,9 @@
    "TYPE_NOT_EXPORTABLE": "group object of a datapoint type that is not exported (date, text)",
    "OVER_LIMIT": "more exportable objects than the small variant's limit; this one dropped",
    "GA_CHANGED": "group address changed, so the BACnet instance number changed",
-   "PRIORITY_STUCK": "BMS command left in priority 8; later KNX changes are masked",
+   "CMD_MASKS_KNX": "BMS command held at a priority above the controller's KNX slot; later KNX changes are masked",
+   "CMD_NO_EFFECT": "BMS command written at a priority below the controller's KNX slot; it never becomes the value",
+   "CMD_SAME_SLOT": "BMS command written into the controller's own KNX slot and relinquished; the value falls back to the frozen Relinquish_Default",
    "DUP_DEVICE": "a second BACnet device with the same device instance on the network",
    "POLL_TOO_SLOW": "client polling interval too long for the signal"
   },
@@ -544,7 +617,9 @@
    "TYPE_NOT_EXPORTABLE": "E4",
    "OVER_LIMIT": "E4",
    "GA_CHANGED": "E3",
-   "PRIORITY_STUCK": "E3",
+   "CMD_MASKS_KNX": "E3",
+   "CMD_NO_EFFECT": "E3",
+   "CMD_SAME_SLOT": "E3",
    "DUP_DEVICE": "E3",
    "POLL_TOO_SLOW": "E3"
   },
@@ -552,9 +627,9 @@
    "1h": {
     "runs_per_class": 40,
     "mean_recall": {
-     "E1": 0.6023,
-     "E2": 0.6409,
-     "E3": 0.9955,
+     "E1": 0.6385,
+     "E2": 0.6712,
+     "E3": 0.9962,
      "E4": 1.0
     },
     "certain_verdicts": {
@@ -567,11 +642,11 @@
       "wrong": 0
      },
      "E3": {
-      "right": 180,
+      "right": 253,
       "wrong": 0
      },
      "E4": {
-      "right": 424,
+      "right": 504,
       "wrong": 0
      }
     },
@@ -584,7 +659,9 @@
      "TYPE_NOT_EXPORTABLE": 1.0,
      "OVER_LIMIT": 0.0,
      "GA_CHANGED": 0.5,
-     "PRIORITY_STUCK": 1.0,
+     "CMD_MASKS_KNX": 1.0,
+     "CMD_NO_EFFECT": 0.975,
+     "CMD_SAME_SLOT": 0.7,
      "DUP_DEVICE": 0.0,
      "POLL_TOO_SLOW": 0.625
     }
@@ -592,9 +669,9 @@
    "8h": {
     "runs_per_class": 40,
     "mean_recall": {
-     "E1": 0.6364,
-     "E2": 0.7273,
-     "E3": 0.9886,
+     "E1": 0.6885,
+     "E2": 0.7673,
+     "E3": 0.9904,
      "E4": 1.0
     },
     "certain_verdicts": {
@@ -607,11 +684,11 @@
       "wrong": 0
      },
      "E3": {
-      "right": 192,
+      "right": 271,
       "wrong": 0
      },
      "E4": {
-      "right": 438,
+      "right": 518,
       "wrong": 0
      }
     },
@@ -619,12 +696,14 @@
      "HEALTHY": 0.95,
      "COV_INC_COARSE": 0.5,
      "COV_SUB_LOST_SAVE": 0.45,
-     "COV_LIFETIME_EXPIRED": 1.0,
+     "COV_LIFETIME_EXPIRED": 0.975,
      "NOT_EXPORTED": 0.525,
      "TYPE_NOT_EXPORTABLE": 1.0,
      "OVER_LIMIT": 0.0,
      "GA_CHANGED": 0.575,
-     "PRIORITY_STUCK": 1.0,
+     "CMD_MASKS_KNX": 1.0,
+     "CMD_NO_EFFECT": 1.0,
+     "CMD_SAME_SLOT": 0.975,
      "DUP_DEVICE": 0.0,
      "POLL_TOO_SLOW": 1.0
     }
@@ -3314,6 +3393,20 @@
     "poll_worse_err_p99_from_s": 30.0
    }
   },
+  "strict_rule_check": {
+   "temperature": {
+    "increment": 0.1,
+    "changes": 2648,
+    "reported_at_least": 1.0,
+    "reported_more_than": 0.5559
+   },
+   "power": {
+    "increment": 10.0,
+    "changes": 11988,
+    "reported_at_least": 1.0,
+    "reported_more_than": 0.9003
+   }
+  },
   "save_study": [
    {
     "renew_s": 300.0,
@@ -3322,6 +3415,12 @@
     "stale_max_s": 285.8477,
     "changes_lost_share": 0.0151,
     "command_reset_unseen_mean_s": 185.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 1.0,
+     "newer_knx_value": 0.0,
+     "no_renewal": 0.0
+    },
+    "first_renewal_frozen_wrong_share": 0.551,
     "renewal_msg_per_s": 1.0
    },
    {
@@ -3331,6 +3430,12 @@
     "stale_max_s": 882.009,
     "changes_lost_share": 0.0404,
     "command_reset_unseen_mean_s": 500.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 1.0,
+     "newer_knx_value": 0.0,
+     "no_renewal": 0.0
+    },
+    "first_renewal_frozen_wrong_share": 0.399,
     "renewal_msg_per_s": 0.3333
    },
    {
@@ -3340,6 +3445,12 @@
     "stale_max_s": 1782.009,
     "changes_lost_share": 0.0781,
     "command_reset_unseen_mean_s": 995.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 0.95,
+     "newer_knx_value": 0.05,
+     "no_renewal": 0.0
+    },
+    "first_renewal_frozen_wrong_share": 0.2723,
     "renewal_msg_per_s": 0.1667
    },
    {
@@ -3349,6 +3460,12 @@
     "stale_max_s": 3582.009,
     "changes_lost_share": 0.1443,
     "command_reset_unseen_mean_s": 1805.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 0.75,
+     "newer_knx_value": 0.25,
+     "no_renewal": 0.0
+    },
+    "first_renewal_frozen_wrong_share": 0.1777,
     "renewal_msg_per_s": 0.0833
    },
    {
@@ -3358,6 +3475,12 @@
     "stale_max_s": 7182.009,
     "changes_lost_share": 0.4263,
     "command_reset_unseen_mean_s": 5405.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 0.0,
+     "newer_knx_value": 1.0,
+     "no_renewal": 0.0
+    },
+    "first_renewal_frozen_wrong_share": 0.055,
     "renewal_msg_per_s": 0.0208
    },
    {
@@ -3367,9 +3490,58 @@
     "stale_max_s": 14381.009,
     "changes_lost_share": 1.0,
     "command_reset_unseen_mean_s": 12604.3871,
+    "command_point_first_renewal": {
+     "frozen_relinquish_default": 0.0,
+     "newer_knx_value": 0.0,
+     "no_renewal": 1.0
+    },
+    "first_renewal_frozen_wrong_share": null,
     "renewal_msg_per_s": 0.0
    }
-  ]
+  ],
+  "save_fallback": {
+   "temperature": {
+    "objects": 1045,
+    "wrong_after_save_share": 0.9761,
+    "wrong_mean_s": 563.0459,
+    "wrong_max_s": 3565.1263,
+    "wrong_to_window_end_share": 0.0
+   },
+   "power": {
+    "objects": 292,
+    "wrong_after_save_share": 0.9966,
+    "wrong_mean_s": 171.135,
+    "wrong_max_s": 1395.7131,
+    "wrong_to_window_end_share": 0.0
+   },
+   "switch": {
+    "objects": 1061,
+    "wrong_after_save_share": 0.4449,
+    "wrong_mean_s": 805.9474,
+    "wrong_max_s": 5737.3091,
+    "wrong_to_window_end_share": 0.0
+   },
+   "setpoint": {
+    "objects": 602,
+    "wrong_after_save_share": 0.7342,
+    "wrong_mean_s": 4911.7688,
+    "wrong_max_s": 14382.5231,
+    "wrong_to_window_end_share": 0.1131
+   },
+   "all": {
+    "objects": 3000,
+    "wrong_after_save_share": 0.7417,
+    "wrong_mean_s": 1427.1982
+   },
+   "commanded_setpoint": {
+    "wrong_mean_s": 2829.7572,
+    "wrong_share": 1.0
+   }
+  },
+  "save_study_priorities": {
+   "bms_command": 8,
+   "controller_slot": 16
+  }
  },
  "support_case": {
   "seed_index": 11,
@@ -3408,9 +3580,32 @@
    6573.9229,
    24.5
   ],
+  "held_point_relinquish_default": 22.0,
+  "held_point_present_value_end": 20.0,
+  "held_point_knx_after_save": [
+   [
+    8851.6948,
+    20.0
+   ],
+   [
+    13189.62,
+    21.0
+   ],
+   [
+    14239.7245,
+    20.0
+   ]
+  ],
+  "held_point_knx_before_save": [
+   [
+    6573.9229,
+    24.5
+   ]
+  ],
+  "knx_priority": 9,
   "messages": {
    "i_am": 2,
-   "rp": 4,
+   "rp": 5,
    "rpm": 0,
    "wp": 2,
    "subscribe": 16,
@@ -3419,5 +3614,5 @@
    "error": 0
   }
  },
- "runtime_s": 209.4
+ "runtime_s": 94.5
 }
