@@ -1,6 +1,6 @@
 """Regenerate everything in results/: summary.json, tables.md, the figures and the support case.
 
-    python scripts/run_all.py            full run (about 2 minutes)
+    python scripts/run_all.py            full run (2 to 4 minutes)
     python scripts/run_all.py --quick    reduced run for CI, writes summary_quick.json only
 """
 from __future__ import annotations
@@ -66,6 +66,7 @@ def rnd(obj, nd=4):
 def diag_section(quick: bool) -> dict:
     runs = 20 if quick else 100
     d = evaluate(runs)
+    d["installations"] = runs * len(FAULTS)
     d["lookalikes"] = {lv: lookalikes(d["confusion"][lv], 0.2) for lv in LEVELS}
     d["certain_total"] = {"right": sum(v["right"] for v in d["certain_verdicts"].values()),
                           "wrong": sum(v["wrong"] for v in d["certain_verdicts"].values())}
@@ -173,7 +174,7 @@ def cov_section(quick: bool) -> dict:
 
 
 def fig_cov(c: dict) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.6), facecolor=SURFACE)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.4), facecolor=SURFACE)
     for ax, name, unit in ((axes[0], "temperature", "K"), (axes[1], "power", "W")):
         rows = c["increment_sweep"][name]
         x = [r["increment"] for r in rows]
@@ -192,7 +193,8 @@ def fig_cov(c: dict) -> None:
         ax.set_ylim(-3, 103)
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(h1 + h2, l1 + l2, fontsize=8, frameon=False, loc="center right")
+        ax.legend(h1 + h2, l1 + l2, fontsize=8, frameon=False, loc="upper center",
+                  bbox_to_anchor=(0.5, -0.17), ncol=2)
     ax = axes[2]
     t = c["traffic"]
     counts = ["150", "500", "2000"]

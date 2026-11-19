@@ -1,0 +1,34 @@
+Support case evidence (simulated installation, seed index 11)
+
+Evidence level E1, complaint point 'temperature 01'
+  COV_LIFETIME_EXPIRED   possible score   2.1
+      - all points silent at the same time
+  COV_SUB_LOST_SAVE      possible score   2.0
+      - all points silent since t = 6960 s (chance 5.9e-86)
+  HEALTHY                possible score   1.0
+      - nothing abnormal in the history
+
+Evidence level E2, complaint point 'temperature 01'
+  COV_LIFETIME_EXPIRED   possible score   3.1
+      - all points silent at the same time
+      - direct read 21.14 differs from BMS value 20.79
+  COV_SUB_LOST_SAVE      possible score   3.0
+      - all points silent since t = 6960 s (chance 5.9e-86)
+      - direct read 21.14 differs from BMS value 20.79
+  COV_INC_COARSE         possible score   1.5
+      - direct read differs by 0.35, less than 1
+
+Evidence level E3, complaint point 'temperature 01'
+  COV_SUB_LOST_SAVE      possible score   3.0
+      - all points silent since t = 6960 s (chance 5.9e-86)
+      - direct read 21.14 differs from BMS value 20.79
+  COV_INC_COARSE         possible score   1.5
+      - direct read differs by 0.35, less than 1
+  HEALTHY                possible score   0.2
+      - nothing abnormal in the history
+
+Evidence level E4, complaint point 'temperature 01'
+  COV_SUB_LOST_SAVE      certain  score  13.0
+      - all points silent since t = 6960 s (chance 5.9e-86)
+      - direct read 21.14 differs from BMS value 20.79
+      - 15 points changed on KNX by more than their COV increment allows with no notification (first at t = 7377 s), while the client's subscriptions were valid and the objects exist

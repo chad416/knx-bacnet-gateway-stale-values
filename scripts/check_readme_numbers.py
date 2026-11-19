@@ -39,7 +39,7 @@ def values(obj):
 def presentations(vals) -> set[str]:
     out = set()
     for v in vals:
-        for x in (v, 100 * v, v / 60, v / 3600):
+        for x in (abs(v), 100 * abs(v), abs(v) / 60, abs(v) / 3600):
             for nd in range(4):
                 s = f"{x:.{nd}f}"
                 out.add(s)
