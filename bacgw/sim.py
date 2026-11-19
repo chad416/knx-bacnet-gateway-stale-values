@@ -20,7 +20,13 @@ POLL_LIMIT = 300.0                     # s, longest acceptable polling interval 
 
 FAULTS = ["HEALTHY", "COV_INC_COARSE", "COV_SUB_LOST_SAVE", "COV_LIFETIME_EXPIRED",
           "NOT_EXPORTED", "TYPE_NOT_EXPORTABLE", "OVER_LIMIT", "GA_CHANGED",
-          "PRIORITY_STUCK", "DUP_DEVICE", "POLL_TOO_SLOW"]
+          "CMD_MASKS_KNX", "CMD_NO_EFFECT", "CMD_SAME_SLOT", "DUP_DEVICE", "POLL_TOO_SLOW"]
+CMD_FAULTS = {"CMD_MASKS_KNX", "CMD_NO_EFFECT", "CMD_SAME_SLOT"}
+BMS_PRIORITY = 8                       # the BMS's commands in all classes except CMD_NO_EFFECT
+# Slot the controller writes KNX values to (its "object priority", G2). The guide makes it
+# configurable and gives no default (assumption A4). Outside the command classes it is below
+# the BMS's slot 8, so that an ordinary BMS command takes effect.
+KNX_PRIORITY_CHOICES = [9, 10, 12, 14, 16]
 
 DESCRIPTION = {
     "HEALTHY": "no fault, the complaint point behaves normally",
@@ -31,7 +37,10 @@ DESCRIPTION = {
     "TYPE_NOT_EXPORTABLE": "group object of a datapoint type that is not exported (date, text)",
     "OVER_LIMIT": "more exportable objects than the small variant's limit; this one dropped",
     "GA_CHANGED": "group address changed, so the BACnet instance number changed",
-    "PRIORITY_STUCK": "BMS command left in priority 8; later KNX changes are masked",
+    "CMD_MASKS_KNX": "BMS command held at a priority above the controller's KNX slot; later KNX changes are masked",
+    "CMD_NO_EFFECT": "BMS command written at a priority below the controller's KNX slot; it never becomes the value",
+    "CMD_SAME_SLOT": "BMS command written into the controller's own KNX slot and relinquished; the value "
+                     "falls back to the frozen Relinquish_Default",
     "DUP_DEVICE": "a second BACnet device with the same device instance on the network",
     "POLL_TOO_SLOW": "client polling interval too long for the signal",
 }
@@ -62,11 +71,13 @@ class Evidence:
     known_names: dict = field(default_factory=dict)      # key -> name at commissioning
     model_name: str = ""
     priority_array: object = None
+    relinquish_default: object = None
     client: ClientConfig | None = None
     sub_records: dict = field(default_factory=dict)
-    # E4: export configuration and KNX group monitor
+    # E4: export configuration, BACnet settings and KNX group monitor
     config: list = field(default_factory=list)
     limit: int | None = None
+    knx_priority: int | None = None                      # the controller's "object priority" (G2)
     knx_monitor: list = field(default_factory=list)      # (t, ga, value)
     truth: dict = field(default_factory=dict)            # never shown to the engine
 
@@ -80,6 +91,8 @@ class Installation:
             raise ValueError(fault)
         self.fault = fault
         self.rng = random.Random(seed)
+        # own stream for the priority slots, so the other draws stay as they were
+        self.prio_rng = random.Random(seed * 7919 + 17)
         self.t_end = t_end
         self.sig = sig or knx.SignalParams()
         self.q: list = []
@@ -105,7 +118,8 @@ class Installation:
         kinds = [k for k, w in DYNAMIC_MIX for _ in range(w)]
         n_dyn = r.randint(12, 24)
         dyn = [r.choice(kinds) for _ in range(n_dyn)]
-        need = {"COV_INC_COARSE": "temperature", "PRIORITY_STUCK": "setpoint",
+        need = {"COV_INC_COARSE": "temperature", "CMD_MASKS_KNX": "setpoint",
+                "CMD_NO_EFFECT": "setpoint", "CMD_SAME_SLOT": "setpoint",
                 "TYPE_NOT_EXPORTABLE": r.choice(["date", "text"]),
                 "POLL_TOO_SLOW": r.choice(["temperature", "switch", "power"])}.get(f)
         if f == "HEALTHY":
@@ -140,8 +154,17 @@ class Installation:
                                                                else round(r.uniform(0, 50), 1)))]
         self.objs = objs
         self.obj_by_name = {o.name: o for o in objs}
+        pr = self.prio_rng
+        if f == "CMD_NO_EFFECT":
+            self.knx_priority = pr.choice([6, 8, 10])
+            self.bms_priority = pr.choice([p for p in (10, 12, 14, 16) if p > self.knx_priority])
+        elif f == "CMD_SAME_SLOT":
+            self.knx_priority = self.bms_priority = pr.choice([8, 10, 12, 16])
+        else:
+            self.knx_priority, self.bms_priority = pr.choice(KNX_PRIORITY_CHOICES), BMS_PRIORITY
+        self.truth["knx_priority"], self.truth["bms_priority"] = self.knx_priority, self.bms_priority
         self.gw = BacnetServer(r.randrange(1000, 100000), GATEWAY_ADDR, objs, limit,
-                               "small" if self.small else "large")
+                               "small" if self.small else "large", self.knx_priority)
         self.net = {GATEWAY_ADDR: self.gw}
 
         # client
@@ -197,21 +220,37 @@ class Installation:
 
         # BMS commands on a setpoint
         sp = [p for p in self.points if p.kind == "setpoint"]
-        if f == "PRIORITY_STUCK":
+        bp = self.bms_priority
+        if f == "CMD_MASKS_KNX":
             p = self.points[0]
             t_w = r.uniform(0.1, 0.4) * self.t_end
-            self._at(t_w, "write", (p, self._other_setpoint(p.name), 8))
+            self._at(t_w, "write", (p, self._other_setpoint(p.name), bp))
             # somebody changes the setpoint at the room panel later (KNX side)
             for _ in range(r.randint(1, 3)):
                 t_k = r.uniform(t_w + 300, self.t_end - 600)
                 self.signals[p.name].append((t_k, r.choice([19.0, 19.5, 22.5, 23.0])))
             self.signals[p.name].sort()
             self.truth["t_fault"] = t_w
+        elif f == "CMD_NO_EFFECT":
+            p = self.points[0]
+            t_w = r.uniform(0.1, 0.6) * self.t_end
+            self._at(t_w, "write", (p, self._other_setpoint(p.name), bp))
+            self.truth["t_fault"] = t_w
+        elif f == "CMD_SAME_SLOT":
+            p = self.points[0]
+            t_w = r.uniform(0.1, 0.4) * self.t_end
+            t_r = t_w + r.uniform(900, 3600)
+            self._at(t_w, "write", (p, self._other_setpoint(p.name), bp))
+            self._at(t_r, "write", (p, None, bp))
+            # nobody touches the room panel after the relinquish, so the fallback lasts until
+            # the complaint (a later KNX telegram would end it)
+            self.signals[p.name] = [e for e in self.signals[p.name] if e[0] < t_r]
+            self.truth["t_fault"] = t_r
         elif sp and r.random() < 0.5:
             p = r.choice(sp)
             t_w = r.uniform(0.1, 0.5) * self.t_end
-            self._at(t_w, "write", (p, self._other_setpoint(p.name), 8))
-            self._at(min(t_w + r.uniform(900, 3600), 0.8 * self.t_end), "write", (p, None, 8))
+            self._at(t_w, "write", (p, self._other_setpoint(p.name), bp))
+            self._at(min(t_w + r.uniform(900, 3600), 0.8 * self.t_end), "write", (p, None, bp))
 
     def _other_setpoint(self, name: str) -> float:
         return self.rng.choice([18.0, 18.5, 24.0, 24.5])
@@ -251,7 +290,8 @@ class Installation:
                 o = self.obj_by_name[p.name]
                 objs.append(KnxObject("other " + p.name, o.ga, o.dpt, True, 1.0))
                 self.signals["other " + p.name] = knx.generate(p.kind, self.rng, self.t_end, self.sig)
-        self.other = BacnetServer(self.gw.device_instance, OTHER_ADDR, objs, SMALL_EXPORT_LIMIT, "small")
+        self.other = BacnetServer(self.gw.device_instance, OTHER_ADDR, objs, SMALL_EXPORT_LIMIT, "small",
+                                  self.knx_priority)
         self.other_by_name = {o.name: o for o in objs}
         self.net[OTHER_ADDR] = self.other
 
@@ -349,11 +389,13 @@ class Installation:
         ev.known_names = dict(bms.known_names)
         ev.model_name = srv.read_property((DEVICE, p.device), "model-name")
         ev.priority_array = srv.read_property(p.key, "priority-array")
+        ev.relinquish_default = srv.read_property(p.key, "relinquish-default")
         ev.client = bms.cfg
         ev.sub_records = bms.subs
         # E4: the real gateway's configuration and the KNX group monitor recording
         ev.config = [KnxObject(o.name, o.ga, o.dpt, o.export, o.cov_increment) for o in self.gw.config]
         ev.limit = self.gw.limit
+        ev.knx_priority = self.gw.knx_priority
         ev.knx_monitor = list(self.monitor)
         self.truth["bms_messages"] = dict(bms.count)
         self.truth["server_messages"] = dict(self.gw.count)

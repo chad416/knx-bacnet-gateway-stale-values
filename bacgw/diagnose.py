@@ -5,9 +5,10 @@ Levels (each includes the ones before it):
       the BMS's own command log
   E2  one direct ReadProperty of the target's Present_Value (value or error)
   E3  Who-Is answers, the device object list (and names of objects that are new since
-      commissioning), the target's Priority_Array, the device model name,
-      the client's polling / subscription configuration and records
-  E4  the gateway's export configuration and a KNX group monitor recording of the window
+      commissioning), the target's Priority_Array and Relinquish_Default, the device model
+      name, the client's polling / subscription configuration and records
+  E4  the gateway's export configuration, its BACnet "object priority" setting (the slot it
+      writes KNX values to) and a KNX group monitor recording of the window
 
 A hypothesis is "certain" only when the evidence contains something that no other class of
 the catalogue can produce under the premises P1..P4 (DOSSIER section 4). "likely" means
@@ -25,8 +26,9 @@ from .server import AV, BV, DEVICE, Error
 LEVELS = ["E1", "E2", "E3", "E4"]
 CERT = {"certain": 2, "likely": 1, "possible": 0}
 POLL_LIMIT = 300.0
+CMD_CLASSES = {"CMD_MASKS_KNX", "CMD_NO_EFFECT", "CMD_SAME_SLOT"}
 STALE_CLASSES = {"HEALTHY", "COV_INC_COARSE", "COV_SUB_LOST_SAVE", "COV_LIFETIME_EXPIRED",
-                 "PRIORITY_STUCK", "POLL_TOO_SLOW"}
+                 "POLL_TOO_SLOW"} | CMD_CLASSES
 # step a KNX value of this kind normally moves by, used when the window shows no step (A9)
 NOMINAL_STEP = {"temperature": 0.1, "setpoint": 0.5, "power": 10.0, "blind": 25.0, "energy": 10.0}
 MISSING_CLASSES = {"NOT_EXPORTED", "TYPE_NOT_EXPORTABLE", "OVER_LIMIT", "GA_CHANGED"}
@@ -147,6 +149,18 @@ def features(ev) -> dict:
     f["cmd_active"] = bool(cmds) and cmds[-1][2] is not None
     f["cmd_value"] = cmds[-1][2] if cmds else None
     f["cmd_t"] = cmds[-1][0] if cmds else None
+    f["cmd_prio"] = cmds[-1][3] if cmds else None
+    writes = [c for c in cmds if c[2] is not None]
+    f["write_value"] = writes[-1][2] if writes else None
+    # was the BMS's last written value ever shown after it was written?
+    f["cmd_shown"] = bool(writes) and any(t >= writes[-1][0] - 1e-6 and v == writes[-1][2] for t, v in ups)
+    # value shown right after a relinquish (COV: same instant; polling: the next poll)
+    f["rel_t"] = cmds[-1][0] if cmds and cmds[-1][2] is None and writes else None
+    f["after_rel"] = None
+    if f["rel_t"] is not None:
+        wait = (f["poll"] or 0.0) + 1.5
+        f["after_rel"] = next((v for t, v in ups if f["rel_t"] - 1e-6 <= t <= f["rel_t"] + wait), None)
+    f["first_value"] = ups[0][1] if ups else None
     # others still updating in the last hour
     others = [n for n in ev.history if n != ev.target]
     f["others_recent"] = sum(1 for n in others if ev.history[n].updates
@@ -194,7 +208,15 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                                             f"{f['gap_b']:.0f} s, then all updated together (client renewal)")
             b.add("COV_LIFETIME_EXPIRED", 0.5, "a common silence that ended with a renewal")
         if f["cmd_active"] and f["last_value"] == f["cmd_value"]:
-            b.add("PRIORITY_STUCK", 2.5, f"BMS command {f['cmd_value']} at t = {f['cmd_t']:.0f} s never relinquished")
+            b.add("CMD_MASKS_KNX", 2.5, f"BMS command {f['cmd_value']} at priority {f['cmd_prio']}, "
+                                        f"t = {f['cmd_t']:.0f} s, never relinquished; the point still shows it")
+        elif f["cmd_active"] and not f["cmd_shown"] and f["has_data"]:
+            b.add("CMD_NO_EFFECT", 2.5, f"BMS command {f['cmd_value']} at priority {f['cmd_prio']}, "
+                                        f"t = {f['cmd_t']:.0f} s, acknowledged but never shown on the point")
+        if f["after_rel"] is not None and f["after_rel"] != f["write_value"] \
+                and f["after_rel"] == f["first_value"]:
+            b.add("CMD_SAME_SLOT", 2.5, f"at the BMS's relinquish (t = {f['rel_t']:.0f} s) the point went to "
+                                        f"{f['after_rel']}, its value at commissioning")
         if analog and f["kind"] in ("temperature", "setpoint") and f["poll"] is None and not silent_long:
             if f["steps"] and min(f["steps"]) >= 0.95:
                 b.add("COV_INC_COARSE", 2.4, f"value moves only in steps >= {min(f['steps']):.2f}")
@@ -223,7 +245,12 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
         bms = f["last_value"]
         diff = None if bms is None else abs(dr - bms)
         if diff is not None and diff < 1e-9:
-            b.add("PRIORITY_STUCK", 0.5, "direct read equals the BMS value: the server itself holds it")
+            if f["cmd_active"] and dr == f["cmd_value"]:
+                b.add("CMD_MASKS_KNX", 0.5, "direct read equals the BMS command: the server itself holds it")
+            elif f["cmd_active"]:
+                b.add("CMD_NO_EFFECT", 0.5, f"direct read {dr} is not the BMS command {f['cmd_value']}")
+            if f["after_rel"] is not None and dr == f["after_rel"]:
+                b.add("CMD_SAME_SLOT", 0.5, "direct read equals the value shown since the relinquish")
             b.add("HEALTHY", 0.5, "direct read equals the BMS value")
         elif diff is not None:
             if analog and diff < 1.0:
@@ -234,7 +261,7 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
             b.add("DUP_DEVICE", 0.5, "direct read differs from BMS value")
             if "HEALTHY" in b.h:
                 b.h["HEALTHY"].score -= 0.8
-            b.drop({"PRIORITY_STUCK"} if not f["cmd_active"] else set(), "")
+            b.drop({"CMD_MASKS_KNX", "CMD_NO_EFFECT"} if not f["cmd_active"] else set(), "")
 
     if lv < 2:
         return b.ranked()
@@ -269,15 +296,7 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                 b.add("TYPE_NOT_EXPORTABLE", 1.0, "object absent; its group object is a date or text")
     else:
         b.drop(MISSING_CLASSES, "object present in the object list")
-        pa = ev.priority_array if isinstance(ev.priority_array, list) else [None] * 16
-        active = [(i + 1, v) for i, v in enumerate(pa) if v is not None]
-        if active and f["cmd_active"] and any(p == c[3] for p, _ in active
-                                              for c in ev.commands if c[1] == ev.target):
-            b.add("PRIORITY_STUCK", 10.0, f"Priority_Array slot {active[0][0]} holds {active[0][1]}, "
-                                          f"written by the BMS at t = {f['cmd_t']:.0f} s and never relinquished",
-                  "certain")
-        else:
-            b.drop({"PRIORITY_STUCK"}, "Priority_Array empty")
+        command_evidence(ev, f, b)
         cfg = ev.client
         if cfg.mode == "poll":
             b.drop({"COV_INC_COARSE", "COV_SUB_LOST_SAVE", "COV_LIFETIME_EXPIRED"}, "client polls")
@@ -322,6 +341,19 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                 b.drop({c}, "export configuration rules it out")
         return b.ranked()
 
+    c = ev.knx_priority
+    if c is not None and f["cmd_prio"] is not None:
+        p = f["cmd_prio"]
+        if p == c:
+            b.add("CMD_SAME_SLOT", 10.0, f"the controller's object priority is {c}, the slot the BMS commands: "
+                                         "KNX values and BMS commands overwrite each other, and a relinquish "
+                                         "empties the controller's slot", "certain")
+        elif p > c and f["cmd_active"]:
+            b.add("CMD_NO_EFFECT", 10.0, f"the controller's object priority is {c}; the BMS commands at {p}, "
+                                         "a lower priority, so its command never wins", "certain")
+        elif "CMD_SAME_SLOT" in b.h:
+            b.drop({"CMD_SAME_SLOT"}, f"the controller writes slot {c}, the BMS slot {p}")
+
     cfg = ev.client
     if cfg.mode == "cov":
         # KNX changes of at least the COV increment that the client never got (whole window,
@@ -359,7 +391,7 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
             b.add("COV_INC_COARSE", 2.0, f"COV increment {cfg_obj.cov_increment:g} is larger than the "
                                          f"KNX step of the signal ({ref:g}), no missed change seen yet", "likely")
             b.drop({"HEALTHY"}, "COV increment not shown to be fine enough for the signal")
-        elif not unseen_big and not unseen_small and "PRIORITY_STUCK" not in b.h \
+        elif not unseen_big and not unseen_small and not CMD_CLASSES & b.h.keys() \
                 and "COV_LIFETIME_EXPIRED" not in b.h:
             b.add("HEALTHY", 10.0, "every KNX change was reported; object exported, one device, "
                                    "subscription valid, no command held", "certain")
@@ -375,12 +407,67 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                 missed += 1
         if cfg.poll_interval > POLL_LIMIT and missed:
             b.add("POLL_TOO_SLOW", 10.0, f"{missed} polling intervals contained more than one KNX value", "certain")
-        elif cfg.poll_interval <= POLL_LIMIT and "PRIORITY_STUCK" not in b.h:
+        elif cfg.poll_interval <= POLL_LIMIT and not CMD_CLASSES & b.h.keys():
             dr_ok = isinstance(dr, (int, float)) and mon_t and abs(dr - mon_t[-1][1]) < 1e-9
             if dr_ok:
                 b.add("HEALTHY", 10.0, f"polling every {cfg.poll_interval:.0f} s, direct read equals the "
                                        "last KNX value, object exported, one device, no command held", "certain")
     return b.ranked()
+
+
+def command_evidence(ev, f, b) -> None:
+    """E3: read the target's Priority_Array against the BMS's own command log.
+
+    Standard rule (B2, B4): the non-empty slot with the lowest number is Present_Value.
+    Documented (G2): the controller writes KNX values into one slot of its own. Under P1 the
+    BMS is the only other writer, so a non-empty slot that the BMS did not fill is the
+    controller's slot.
+    """
+    pa = ev.priority_array if isinstance(ev.priority_array, list) else [None] * 16
+    if f["cmd_prio"] is None:
+        b.drop(CMD_CLASSES, "the BMS never commanded the point")
+        return
+    p = f["cmd_prio"]
+    mine = pa[p - 1]
+    higher = [(i + 1, v) for i, v in enumerate(pa[:p - 1]) if v is not None]
+    lower = [(i + p + 1, v) for i, v in enumerate(pa[p:]) if v is not None]
+    if f["cmd_active"] and mine == f["cmd_value"]:
+        if higher or lower:
+            b.drop({"CMD_SAME_SLOT"}, f"another slot than the BMS's slot {p} is in use")
+        if higher:
+            q, v = higher[0]
+            b.add("CMD_NO_EFFECT", 10.0, f"Priority_Array slot {p} holds the BMS command {mine}, but slot {q} "
+                                         f"holds {v}, which the BMS did not write: the controller's KNX slot "
+                                         "is above the command, so the command never becomes the value", "certain")
+            b.drop({"CMD_MASKS_KNX"}, "a slot above the BMS command is in use")
+        elif lower:
+            b.add("CMD_MASKS_KNX", 10.0, f"Priority_Array slot {p} holds {mine}, written by the BMS at "
+                                         f"t = {f['cmd_t']:.0f} s and never relinquished; slot {lower[0][0]} "
+                                         f"below it holds {lower[0][1]}, the controller's KNX slot", "certain")
+            b.drop({"CMD_NO_EFFECT"}, "no slot above the BMS command is in use")
+        else:
+            # no other slot in use: the controller's KNX value can only be in the BMS's own
+            # slot (or the arrays were reset since); the object priority setting decides (E4)
+            b.add("CMD_SAME_SLOT", 3.0, f"Priority_Array slot {p} holds the BMS command {mine} and no other "
+                                        "slot is in use: the controller's KNX slot is likely the same slot",
+                  "likely")
+            b.drop({"CMD_NO_EFFECT"}, "no slot above the BMS command is in use")
+    elif mine is not None and mine != f["cmd_value"]:
+        what = "relinquished it" if f["cmd_value"] is None else f"wrote {f['cmd_value']}"
+        rd = ev.relinquish_default
+        b.add("CMD_SAME_SLOT", 10.0, f"Priority_Array slot {p} holds {mine}, but the BMS last {what} there "
+                                     f"at t = {f['cmd_t']:.0f} s: the controller writes its KNX values into the "
+                                     f"BMS's own slot (Relinquish_Default {rd})", "certain")
+        b.drop({"CMD_MASKS_KNX", "CMD_NO_EFFECT"}, "")
+    elif f["cmd_value"] is None and all(v is None for v in pa):
+        # the controller's slot holds a value whenever the object has one, so an empty array
+        # means its slot was emptied: by this relinquish, or by a reset of all arrays
+        b.add("CMD_SAME_SLOT", 3.0, f"every Priority_Array slot is empty after the BMS relinquished slot {p} "
+                                    f"at t = {f['cmd_t']:.0f} s: the relinquish likely emptied the controller's "
+                                    f"KNX slot; Present_Value is Relinquish_Default {ev.relinquish_default}", "likely")
+        b.drop({"CMD_MASKS_KNX", "CMD_NO_EFFECT"}, "")
+    else:
+        b.drop(CMD_CLASSES, f"Priority_Array slot {p} is empty, as the BMS left it")
 
 
 def _held(ev, name):

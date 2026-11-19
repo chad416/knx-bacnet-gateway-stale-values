@@ -82,13 +82,40 @@ def test_ga_changed_signature():
         assert moved[0][1] == knx.ga_to_instance(ev.truth["new_ga"]) != target_key(ev)[1]
 
 
-def test_priority_stuck_signature():
-    for ev in runs("PRIORITY_STUCK"):
-        assert ev.priority_array[7] is not None
-        assert ev.direct_read == ev.priority_array[7] == stale(ev)
+def target_commands(ev):
+    return [c for c in ev.commands if c[1] == ev.target]
+
+
+def test_command_masks_knx_signature():
+    for ev in runs("CMD_MASKS_KNX"):
+        t, _, v, p, _ = target_commands(ev)[-1]
+        assert v is not None and p < ev.knx_priority
+        assert ev.priority_array[p - 1] == v and all(x is None for x in ev.priority_array[:p - 1])
+        assert ev.direct_read == v == stale(ev)
         ga = next(o for o in ev.config if o.name == ev.target).ga
-        knx_last = [v for t, g, v in ev.knx_monitor if g == ga][-1]
+        knx_last = [v2 for t2, g, v2 in ev.knx_monitor if g == ga][-1]
         assert knx_last != ev.direct_read                # KNX moved on, BACnet did not
+        assert ev.priority_array[ev.knx_priority - 1] == knx_last   # waiting in the controller's slot
+
+
+def test_command_no_effect_signature():
+    for ev in runs("CMD_NO_EFFECT"):
+        t, _, v, p, res = target_commands(ev)[-1]
+        assert res == "ack" and v is not None and p > ev.knx_priority
+        assert ev.priority_array[p - 1] == v
+        assert ev.priority_array[ev.knx_priority - 1] == ev.direct_read != v
+        # the command value never appears in the history after it was written
+        assert all(v2 != v for t2, v2 in ev.history[ev.target].updates if t2 >= t)
+
+
+def test_command_same_slot_signature():
+    for ev in runs("CMD_SAME_SLOT"):
+        cmds = target_commands(ev)
+        (t_w, _, v_w, p, _), (t_r, _, v_r, p_r, _) = cmds[-2], cmds[-1]
+        assert p == p_r == ev.knx_priority and v_w is not None and v_r is None
+        ups = ev.history[ev.target].updates
+        # after the relinquish the point shows the frozen Relinquish_Default, its commissioning value
+        assert ev.direct_read == ev.relinquish_default == ups[0][1] == stale(ev) != v_w
 
 
 def test_duplicate_device_signature():
