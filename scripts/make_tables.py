@@ -93,14 +93,39 @@ def build(d: dict) -> str:
                    f"{num(v['poll_worse_missed_from_s'], 0)} | {num(v['poll_worse_err_p99_from_s'], 0)} |")
     out.append("")
 
+    sp = cv["save_study_priorities"]
     out += ["## T8. After the gateway's COV settings are saved (150 objects, 6 h, save at 2 to 3 h)", "",
+            f"The BMS holds a command at priority {sp['bms_command']} on one setpoint; the controller writes KNX values "
+            f"to slot {sp['controller_slot']}. The save cancels every subscription and empties every priority array. "
+            "The BMS never writes its command again, so the command stays lost for good; the column says how long "
+            "the BMS still believes it holds. Last two columns: what the BMS gets at its first renewal after the save.", "",
             "| Client renewal | Mean stale (min) | Longest stale (min) | KNX changes after the save never reported (%) | "
-            "Reset BMS command unseen, mean (min) | Renewal traffic (msg/s) |", "|---|---|---|---|---|---|"]
+            "BMS believes its command holds, mean (min) | Renewal traffic (msg/s) | Commanded point at first renewal: "
+            "frozen Relinquish_Default (% of runs) | All points: first renewal delivers a wrong frozen value (%) |",
+            "|---|---|---|---|---|---|---|---|"]
     for r in cv["save_study"]:
         lab = "never (lifetime 0)" if r["renew_s"] is None else f"{r['renew_s']:.0f} s"
         out.append(f"| {lab} | {num(r['stale_mean_s'] / 60)} | {num(r['stale_max_s'] / 60)} | {pc(r['changes_lost_share'])} | "
-                   f"{num(r['command_reset_unseen_mean_s'] / 60)} | {num(r['renewal_msg_per_s'], 3)} |")
+                   f"{num(r['command_reset_unseen_mean_s'] / 60)} | {num(r['renewal_msg_per_s'], 3)} | "
+                   f"{pc(r['command_point_first_renewal']['frozen_relinquish_default']) if r['renew_s'] else '-'} | "
+                   f"{pc(r['first_renewal_frozen_wrong_share'])} |")
     out.append("")
+    fb = cv["save_fallback"]
+    t11 = ["## T11. Present_Value on the gateway itself after a COV settings save", "",
+            "Same installations as T8. After the save every slot is empty, so Present_Value is the frozen "
+            "Relinquish_Default (the value at the first read, at commissioning) until the object's next KNX telegram. "
+            "Wrong = differs from the value on KNX. A polling client reads exactly this.", "",
+            "| Signal | Objects | Wrong right after the save (%) | Time wrong, mean (min) | Time wrong, longest (min) | "
+            "Still wrong at the window end (% of wrong) |", "|---|---|---|---|---|---|"]
+    for kd in ("temperature", "power", "switch", "setpoint"):
+        r = fb[kd]
+        t11.append(f"| {kd} | {r['objects']} | {pc(r['wrong_after_save_share'])} | {num(r['wrong_mean_s'] / 60)} | "
+                   f"{num(r['wrong_max_s'] / 60)} | {pc(r['wrong_to_window_end_share'])} |")
+    t11.append(f"| all | {fb['all']['objects']} | {pc(fb['all']['wrong_after_save_share'])} | "
+               f"{num(fb['all']['wrong_mean_s'] / 60)} | - | - |")
+    t11 += ["", f"The commanded setpoint: wrong after the save in {pc(fb['commanded_setpoint']['wrong_share'])} % of runs, "
+            f"for {num(fb['commanded_setpoint']['wrong_mean_s'] / 60)} min on average (BACnet shows the commissioning "
+            "value while KNX still holds the command).", ""]
 
     out += ["## T9. Model check: COV on a random walk", "",
             "Mean time to move by the increment a from the last report is a^2 / sigma^2.", "",
@@ -124,13 +149,22 @@ def build(d: dict) -> str:
         out.append(f"| {k} | {pc(r[0.2]['missed_share'])} | {num(c['poll_worse_missed_from_s'], 0)} | "
                    f"{num(c['poll_worse_err_p99_from_s'], 0)} | {pc(sw['missed_share'])} |")
     out.append("")
-    out += ["Diagnosis with a different window length (mean right-first share over 11 classes, %):", "",
+    out += [f"Diagnosis with a different window length (mean right-first share over {len(dg['faults'])} classes, %):", "",
             "| Window | E1 | E2 | E3 | E4 | Certain wrong |", "|---|---|---|---|---|---|"]
     out.append(f"| 4 h (base) | " + " | ".join(pc(dg["mean_recall"][lv]) for lv in L) +
                f" | {dg['certain_total']['wrong']} |")
     for k, s in dg["window_sensitivity"].items():
         w = sum(v["wrong"] for v in s["certain_verdicts"].values())
         out.append(f"| {k} ({s['runs_per_class']} runs per class) | " + " | ".join(pc(s["mean_recall"][lv]) for lv in L) + f" | {w} |")
+    out.append("")
+    out += t11
+    sr = cv["strict_rule_check"]
+    out += ["## T12. Open point O2: \"at least\" or \"more than\" the increment", "",
+            "Increment equal to the sensor's send step. Share of KNX changes that each reading of the rule reports.", "",
+            "| Signal | Increment | Changes | Reported, at least the increment (model) (%) | Reported, more than the increment (%) |",
+            "|---|---|---|---|---|"]
+    for name, r in sr.items():
+        out.append(f"| {name} | {r['increment']:g} | {r['changes']} | {pc(r['reported_at_least'])} | {pc(r['reported_more_than'])} |")
     out.append("")
     return "\n".join(out)
 

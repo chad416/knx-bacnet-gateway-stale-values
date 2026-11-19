@@ -43,6 +43,27 @@ def cov_replay(events, inc: float | None, renew: float | None = None, t_end: flo
     return shown
 
 
+def strict_rule_check(seeds: int = 20, p=None) -> dict:
+    """Open point O2: the guide's wording (G3) is "changes by more than" the increment, the
+    model reports at "at least" the increment (B2). With the increment equal to the sensor's
+    send step, how many of the changes would each rule report?"""
+    out = {}
+    for name, inc in (("temperature", 0.1), ("power", 10.0)):
+        sigs = signal_set(name, seeds, DAY, p)
+        changes = sum(1 for e in sigs for a, b in zip(e, e[1:]) if a[1] != b[1])
+        at_least = more_than = 0
+        for e in sigs:
+            r1 = r2 = e[0][1]
+            for _, v in e[1:]:
+                if abs(v - r1) >= inc - 1e-9:
+                    r1, at_least = v, at_least + 1
+                if abs(v - r2) > inc + 1e-9:
+                    r2, more_than = v, more_than + 1
+        out[name] = {"increment": inc, "changes": changes, "reported_at_least": at_least / changes,
+                     "reported_more_than": more_than / changes}
+    return out
+
+
 def count_notifications(events, inc: float | None) -> int:
     ref, n = events[0][1], 0
     for _, v in events[1:]:
@@ -231,37 +252,57 @@ def traffic(sweep: dict, counts=(150, 500, 2000), choices=None) -> dict:
 
 
 # ------------------------------------------------------------------ saving the COV settings
+SAVE_KINDS, SAVE_WEIGHTS = ["temperature", "power", "switch", "setpoint"], [35, 10, 35, 20]
+SAVE_T_END = 6 * 3600.0
+BMS_CMD_PRIORITY = 8                   # the BMS's command in the save study
+SAVE_KNX_PRIORITY = 16                 # the controller's slot in the save study (A4)
+
+
+def _save_installation(k: int, seed: int, n_objects: int, knx_priority: int):
+    """One installation of the save study: n objects, their KNX signals, a server that has
+    received the first telegram of every object. Same draws for every renewal option."""
+    rng = random.Random(seed * 1000 + k)
+    kinds = rng.choices(SAVE_KINDS, weights=SAVE_WEIGHTS, k=n_objects)
+    objs, sigs, kind_of = [], {}, {}
+    for i, kind in enumerate(kinds):
+        ga = knx.format_ga(1 + i // 256, 0, i % 256)
+        inc = {"temperature": 0.1, "setpoint": 0.1, "power": 10.0}.get(kind, 1.0)
+        objs.append(KnxObject(f"o{i}", ga, knx.SIGNAL_DPT[kind], True, inc))
+        sigs[ga] = knx.generate(kind, rng, SAVE_T_END)
+        kind_of[ga] = kind
+    srv = BacnetServer(100, "gw", objs, None, "large", knx_priority)
+    for ga, ev in sigs.items():
+        srv.knx_telegram(0.0, ga, ev[0][1])
+    keys = {o.ga: (AV if o.kind == "numeric" else BV, knx.ga_to_instance(o.ga)) for o in objs}
+    sp_ga = next(ga for ga, kd in kind_of.items() if kd == "setpoint")
+    t_save = rng.uniform(2 * 3600, 3 * 3600)
+    return srv, sigs, keys, kind_of, sp_ga, t_save
+
+
 def save_study(renew_options=(300.0, 900.0, 1800.0, 3600.0, 14400.0, None), n_objects: int = 150,
-               runs: int = 20, seed: int = 3) -> list[dict]:
-    """A running BMS with COV subscriptions to n objects; the COV settings are saved at a
-    random moment. Measured: how long values stay stale, how many KNX changes the BMS never
-    sees, and what happens to a BMS command held in the priority array."""
+               runs: int = 20, seed: int = 3, knx_priority: int = SAVE_KNX_PRIORITY) -> list[dict]:
+    """A running BMS with COV subscriptions to n objects; the BMS holds a command at priority
+    8 on one setpoint (above the controller's slot, so it is in force); the COV settings are
+    saved at a random moment. The save cancels every subscription and empties every priority
+    array (G3), so the command is gone and Present_Value falls back to the frozen
+    Relinquish_Default until the object's next KNX telegram (A5).
+
+    Measured per renewal interval: how long values stay stale on the BMS, how many KNX changes
+    it never sees, how long the BMS still believes its command holds, and what it reads for
+    the commanded point at its first renewal after the save."""
     out = []
-    t_end = 6 * 3600.0
+    t_end = SAVE_T_END
     for R in renew_options:
-        stale, lost, changes, cmd_unseen, renew_msgs = [], 0, 0, [], 0
+        stale, lost, changes, cmd_unseen = [], 0, 0, []
+        cmd_first = {"frozen_relinquish_default": 0, "newer_knx_value": 0, "no_renewal": 0}
+        renew_rd_wrong, renew_reads = 0, 0
         for k in range(runs):
-            rng = random.Random(seed * 1000 + k)
-            kinds = rng.choices(["temperature", "power", "switch", "setpoint"],
-                                weights=[35, 10, 35, 20], k=n_objects)
-            objs, sigs = [], {}
-            for i, kind in enumerate(kinds):
-                ga = knx.format_ga(1 + i // 256, 0, i % 256)
-                inc = {"temperature": 0.1, "setpoint": 0.1, "power": 10.0}.get(kind, 1.0)
-                objs.append(KnxObject(f"o{i}", ga, knx.SIGNAL_DPT[kind], True, inc))
-                sigs[ga] = knx.generate(kind, rng, t_end)
-            srv = BacnetServer(100, "gw", objs, None, "large")
-            for ga, ev in sigs.items():
-                srv.knx_telegram(0.0, ga, ev[0][1])
-            keys = {o.ga: (AV if o.kind == "numeric" else BV, knx.ga_to_instance(o.ga)) for o in objs}
+            srv, sigs, keys, kind_of, sp_ga, t_save = _save_installation(k, seed, n_objects, knx_priority)
             shown = {}
             lifetime = 0.0 if R is None else 2 * R
             for ga, key in keys.items():
                 _, notes = srv.subscribe_cov(1.0, "bms", 1, key, False, lifetime)
                 shown[ga] = notes[0].value
-            sp_ga = next(o.ga for o in objs if o.dpt == "9.001" and o.name and
-                         kinds[int(o.name[1:])] == "setpoint")
-            t_save = rng.uniform(2 * 3600, 3 * 3600)
             t_cmd = t_save - 600
             events = sorted((t, ga, v) for ga, ev in sigs.items() for t, v in ev[1:])
             events.append((t_cmd, "cmd", 24.0))
@@ -273,28 +314,39 @@ def save_study(renew_options=(300.0, 900.0, 1800.0, 3600.0, 14400.0, None), n_ob
                     t += R
             events.sort(key=lambda e: e[0])
             true = {ga: ev[0][1] for ga, ev in sigs.items()}
+            telegram_since_save = set()
             stale_since = {}
             restored = None
             for t, ga, v in events:
                 if ga == "cmd":
-                    _, _, notes = srv.write_property(t, keys[sp_ga], "present-value", v, 8)
+                    _, telegram, notes = srv.write_property(t, keys[sp_ga], "present-value", v,
+                                                           BMS_CMD_PRIORITY)
+                    if telegram:                          # the command reaches KNX (A16)
+                        true[sp_ga] = telegram[2]
                     for n in notes:
                         shown[sp_ga] = n.value
                 elif ga == "save":
                     srv.save_cov_settings()
                 elif ga == "renew":
-                    renew_msgs += 2 * len(keys)
+                    first = restored is None and t > t_save
                     for g, key in keys.items():
                         _, notes = srv.subscribe_cov(t, "bms", 1, key, False, lifetime)
                         shown[g] = notes[0].value
                         if g in stale_since and t > t_save:
                             stale.append(t - stale_since.pop(g))
-                    if restored is None and t > t_save:
+                        if first:
+                            renew_reads += 1
+                            if g not in telegram_since_save and shown[g] != true[g]:
+                                renew_rd_wrong += 1       # the renewal delivers the frozen value
+                    if first:
                         restored = t
+                        cmd_first["newer_knx_value" if sp_ga in telegram_since_save
+                                  else "frozen_relinquish_default"] += 1
                 else:
                     true[ga] = v
                     if t > t_save:
                         changes += 1
+                        telegram_since_save.add(ga)
                     notes = srv.knx_telegram(t, ga, v)
                     if notes:
                         shown[ga] = notes[0].value
@@ -303,6 +355,8 @@ def save_study(renew_options=(300.0, 900.0, 1800.0, 3600.0, 14400.0, None), n_ob
                         stale_since.setdefault(ga, t)
             for g, t0 in stale_since.items():
                 stale.append(t_end - t0)
+            if restored is None:
+                cmd_first["no_renewal"] += 1
             # the BMS command was reset at t_save; the BMS learns it at the first renewal
             cmd_unseen.append((restored or t_end) - t_save)
         out.append({"renew_s": R, "objects": n_objects,
@@ -310,5 +364,70 @@ def save_study(renew_options=(300.0, 900.0, 1800.0, 3600.0, 14400.0, None), n_ob
                     "stale_max_s": float(np.max(stale)) if stale else 0.0,
                     "changes_lost_share": lost / max(1, changes),
                     "command_reset_unseen_mean_s": float(np.mean(cmd_unseen)),
+                    "command_point_first_renewal": {k2: v2 / runs for k2, v2 in cmd_first.items()},
+                    "first_renewal_frozen_wrong_share": renew_rd_wrong / renew_reads if renew_reads else None,
                     "renewal_msg_per_s": (2 * n_objects / R) if R else 0.0})
+    return out
+
+
+def fallback_after_save(n_objects: int = 150, runs: int = 20, seed: int = 3,
+                        knx_priority: int = SAVE_KNX_PRIORITY) -> dict:
+    """What Present_Value itself shows after a save, whatever the client does (a polling
+    client reads exactly this). Same installations as `save_study`, with the BMS command on
+    one setpoint. After the save each object shows its frozen Relinquish_Default (its value
+    at the first read, t = 1 s) until its next KNX telegram refills the controller's slot.
+
+    Per signal kind: share of objects whose Present_Value is wrong right after the save
+    (Relinquish_Default differs from the KNX value), and for those, how long it stays wrong."""
+    wrong = {k: [] for k in SAVE_KINDS}           # time wrong after the save, per wrong object
+    to_end = {k: 0 for k in SAVE_KINDS}           # wrong objects still wrong at the window end
+    total = {k: 0 for k in SAVE_KINDS}
+    cmd_wrong = []
+    for k in range(runs):
+        srv, sigs, keys, kind_of, sp_ga, t_save = _save_installation(k, seed, n_objects, knx_priority)
+        for ga, key in keys.items():
+            srv.read_property(key, "present-value")      # first read by the client freezes RD
+        events = sorted((t, ga, v) for ga, ev in sigs.items() for t, v in ev[1:])
+        events += [(t_save - 600, "cmd", 24.0), (t_save, "save", None)]
+        events.sort(key=lambda e: e[0])
+        true = {ga: ev[0][1] for ga, ev in sigs.items()}
+        wrong_since = {}
+        for t, ga, v in events:
+            if ga == "cmd":
+                _, telegram, _ = srv.write_property(t, keys[sp_ga], "present-value", v, BMS_CMD_PRIORITY)
+                if telegram:
+                    true[sp_ga] = telegram[2]
+            elif ga == "save":
+                srv.save_cov_settings()
+                for g, key in keys.items():
+                    total[kind_of[g]] += 1
+                    if srv.read_property(key, "present-value") != true[g]:
+                        wrong_since[g] = t
+                if sp_ga not in wrong_since:
+                    cmd_wrong.append(0.0)
+            else:
+                true[ga] = v
+                srv.knx_telegram(t, ga, v)
+                if ga in wrong_since and srv.read_property(keys[ga], "present-value") == true[ga]:
+                    d = t - wrong_since.pop(ga)
+                    wrong[kind_of[ga]].append(d)
+                    if ga == sp_ga:
+                        cmd_wrong.append(d)
+        for g, t0 in wrong_since.items():
+            wrong[kind_of[g]].append(SAVE_T_END - t0)
+            to_end[kind_of[g]] += 1
+            if g == sp_ga:
+                cmd_wrong.append(SAVE_T_END - t0)
+    out = {}
+    for kd in SAVE_KINDS:
+        w = wrong[kd]
+        out[kd] = {"objects": total[kd], "wrong_after_save_share": len(w) / max(1, total[kd]),
+                   "wrong_mean_s": float(np.mean(w)) if w else 0.0,
+                   "wrong_max_s": float(np.max(w)) if w else 0.0,
+                   "wrong_to_window_end_share": to_end[kd] / len(w) if w else 0.0}
+    allw = [x for kd in SAVE_KINDS for x in wrong[kd]]
+    out["all"] = {"objects": sum(total.values()), "wrong_after_save_share": len(allw) / sum(total.values()),
+                  "wrong_mean_s": float(np.mean(allw)) if allw else 0.0}
+    out["commanded_setpoint"] = {"wrong_mean_s": float(np.mean(cmd_wrong)),
+                                 "wrong_share": sum(1 for x in cmd_wrong if x > 0) / len(cmd_wrong)}
     return out

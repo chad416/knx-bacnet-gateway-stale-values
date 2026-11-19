@@ -61,6 +61,29 @@ def test_save_study_stale_time_is_bounded_by_renewal():
     rows = C.save_study(renew_options=(600.0,), n_objects=20, runs=3)
     assert rows[0]["stale_max_s"] <= 600.0 + 1
     assert rows[0]["renewal_msg_per_s"] == pytest.approx(2 * 20 / 600)
+    shares = rows[0]["command_point_first_renewal"]
+    assert sum(shares.values()) == pytest.approx(1.0) and shares["no_renewal"] == 0
+
+
+def test_save_study_without_renewal_never_tells_the_bms():
+    row = C.save_study(renew_options=(None,), n_objects=20, runs=2)[0]
+    assert row["changes_lost_share"] == 1.0 and row["command_point_first_renewal"]["no_renewal"] == 1.0
+
+
+def test_fallback_after_save_ends_at_the_next_telegram():
+    fb = C.fallback_after_save(n_objects=20, runs=3)
+    # the commanded setpoint: KNX holds the command, BACnet falls back to the commissioning value
+    assert fb["commanded_setpoint"]["wrong_share"] == 1.0
+    for kd in C.SAVE_KINDS:
+        assert 0.0 <= fb[kd]["wrong_after_save_share"] <= 1.0
+        assert fb[kd]["wrong_max_s"] <= C.SAVE_T_END
+
+
+def test_strict_rule_reports_fewer_changes():
+    r = C.strict_rule_check(seeds=2)
+    for name in ("temperature", "power"):
+        assert r[name]["reported_at_least"] == pytest.approx(1.0)   # increment = sensor step
+        assert r[name]["reported_more_than"] < r[name]["reported_at_least"]
 
 
 def test_traffic_scales_with_object_count():

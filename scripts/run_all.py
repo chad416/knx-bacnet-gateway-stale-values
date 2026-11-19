@@ -24,7 +24,7 @@ from bacgw import covstudy as C                       # noqa: E402
 from bacgw import knx                                 # noqa: E402
 from bacgw.diagnose import LEVELS, report             # noqa: E402
 from bacgw.evaluate import evaluate, lookalikes, seed_of   # noqa: E402
-from bacgw.sim import DESCRIPTION, FAULTS, Installation   # noqa: E402
+from bacgw.sim import BMS_PRIORITY, DESCRIPTION, FAULTS, KNX_PRIORITY_CHOICES, Installation   # noqa: E402
 
 RES = ROOT / "results"
 BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
@@ -33,7 +33,8 @@ SEQ = matplotlib.colors.LinearSegmentedColormap.from_list("seq", ["#f3f7fd", "#9
 SHORT = {"HEALTHY": "healthy", "COV_INC_COARSE": "COV incr. too coarse", "COV_SUB_LOST_SAVE": "subs lost (COV save)",
          "COV_LIFETIME_EXPIRED": "lifetime expired", "NOT_EXPORTED": "not exported",
          "TYPE_NOT_EXPORTABLE": "type not exportable", "OVER_LIMIT": "over export limit",
-         "GA_CHANGED": "group address changed", "PRIORITY_STUCK": "priority 8 left",
+         "GA_CHANGED": "group address changed", "CMD_MASKS_KNX": "command masks KNX",
+         "CMD_NO_EFFECT": "command has no effect", "CMD_SAME_SLOT": "command in KNX slot",
          "DUP_DEVICE": "duplicate device inst.", "POLL_TOO_SLOW": "polling too slow"}
 
 
@@ -86,7 +87,7 @@ def diag_section(quick: bool) -> dict:
 
 
 def fig_diag(d: dict) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.4), facecolor=SURFACE, sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6.2), facecolor=SURFACE, sharey=True)
     for ax, key, title in ((axes[0], "recall", "Right class ranked first"),
                            (axes[1], "certain_and_right", "Right class and reported as certain")):
         m = np.array([[d[key][lv][f] for lv in LEVELS] for f in FAULTS])
@@ -107,7 +108,7 @@ def fig_diag(d: dict) -> None:
     fig.savefig(RES / "diagnosis_by_evidence.png", dpi=150)
     plt.close(fig)
 
-    fig, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), facecolor=SURFACE)
+    fig, axes = plt.subplots(1, 2, figsize=(14.5, 7.0), facecolor=SURFACE)
     for ax, lv in zip(axes, ("E1", "E2")):
         cls = FAULTS + ["NONE"]
         m = np.array([[d["confusion"][lv][f].get(g, 0) for g in FAULTS] for f in FAULTS])
@@ -169,7 +170,10 @@ def cov_section(quick: bool) -> dict:
         out["sensitivity"][label]["cov_vs_polling_temperature_0.2K"] = {
             "poll_worse_missed_from_s": C.crossover(s["polling_sweep"]["temperature"], r[0.2], "missed_share"),
             "poll_worse_err_p99_from_s": C.crossover(s["polling_sweep"]["temperature"], r[0.2], "err_p99")}
+    out["strict_rule_check"] = C.strict_rule_check(seeds)
     out["save_study"] = C.save_study(runs=5 if quick else 20)
+    out["save_fallback"] = C.fallback_after_save(runs=5 if quick else 20)
+    out["save_study_priorities"] = {"bms_command": C.BMS_CMD_PRIORITY, "controller_slot": C.SAVE_KNX_PRIORITY}
     return out
 
 
@@ -261,11 +265,18 @@ def support_case() -> dict:
     p = ev.history[ev.target]
     held_p = held[0][1]
     ph = ev.history[held_p]
+    hobj = inst.gw.by_ga[inst.obj_by_name[held_p].ga]
+    knx_held = [(t, v) for t, g, v in ev.knx_monitor if g == hobj.ga]
     case = {"seed_index": i, "target": ev.target, "target_kind": ev.points[ev.target]["kind"],
             "points": len(ev.points), "t_save_s": round(t_save, 1), "client": ev.client.__dict__,
             "last_update_target": rnd(p.updates[-1]), "direct_read": ev.direct_read,
             "held_point": held_p, "held_command": rnd(held[0]), "relinquish": rnd(rel[0]),
             "held_point_bms_last": rnd(ph.updates[-1]),
+            "held_point_relinquish_default": hobj.relinquish_default,
+            "held_point_present_value_end": hobj.present_value,
+            "held_point_knx_after_save": rnd([x for x in knx_held if x[0] > t_save]),
+            "held_point_knx_before_save": rnd([x for x in knx_held if x[0] <= t_save][-1:]),
+            "knx_priority": ev.knx_priority,
             "messages": ev.truth["server_messages"]}
     return case
 
@@ -282,7 +293,10 @@ def main() -> None:
     # model constants that the README quotes (sources and assumptions in DOSSIER 7.1)
     summary["constants"] = {
         "window_h": 4, "priority_levels": 16, "manual_operator_priority": 8,
-        "export_limit_small": 150, "recommended_large": 2000, "object_counts": [150, 500, 2000],
+        "export_limit_small": 150, "recommended_large": 2000, "recommended_older_hardware": 500,
+        "recommendation_change_interval_s": 60, "object_counts": [150, 500, 2000],
+        "bacnet_port_default": 47808, "knx_priority_choices": KNX_PRIORITY_CHOICES,
+        "bms_priority": BMS_PRIORITY,
         "default_cov_increment": 1, "poll_limit_s": 300, "max_subscriptions_default": 256,
         "fault_classes": len(FAULTS) - 1, "classes_with_healthy": len(FAULTS),
         "instance_example": {"ga": "1/1/1", "instance": knx.ga_to_instance("1/1/1"),
