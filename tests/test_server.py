@@ -117,8 +117,12 @@ def test_write_errors():
 
 
 # ------------------------------------------------------------ priority array
-def test_priority_array_highest_non_null_wins_and_relinquish_default():
-    s = server([KnxObject("sp", "3/0/1", "9.001")])
+def server_slot(knx_priority, objs=None):
+    return BacnetServer(1234, "a", objs or [KnxObject("sp", "3/0/1", "9.001")], 150, "small", knx_priority)
+
+
+def test_priority_array_highest_non_null_wins():
+    s = server_slot(12)
     key = (AV, 6145)
     s.knx_telegram(0, "3/0/1", 21.0)
     assert s.read_property(key, "present-value") == 21.0
@@ -129,22 +133,83 @@ def test_priority_array_highest_non_null_wins_and_relinquish_default():
     assert s.read_property(key, "present-value") == 19.0
     s.write_property(4, key, "present-value", None, 5)
     s.write_property(5, key, "present-value", None, 8)
-    assert s.read_property(key, "present-value") == 18.0
+    # the controller's slot 12 holds the last value it sent to KNX (A16), above slot 16
+    assert s.read_property(key, "present-value") == 24.0
     pa = s.read_property(key, "priority-array")
-    assert len(pa) == 16 and pa[15] == 18.0 and pa[7] is None
+    assert len(pa) == 16 and pa[15] == 18.0 and pa[11] == 24.0 and pa[7] is None
 
 
-def test_knx_change_is_masked_while_a_command_is_held():
-    s = server([KnxObject("sp", "3/0/1", "9.001")])
+def test_knx_values_go_into_the_configured_slot():
+    s = server_slot(10)
+    s.knx_telegram(0, "3/0/1", 21.0)
+    pa = s.read_property((AV, 6145), "priority-array")
+    assert pa[9] == 21.0 and sum(v is not None for v in pa) == 1
+    with pytest.raises(ValueError):
+        server_slot(17)
+
+
+def test_relinquish_default_is_set_at_the_first_read_and_frozen():
+    s = server_slot(16)
+    key = (AV, 6145)
+    s.knx_telegram(0, "3/0/1", 21.0)
+    assert s.objects[key].relinquish_default is None          # nobody has read it yet
+    s.knx_telegram(5, "3/0/1", 21.5)
+    assert s.read_property(key, "present-value") == 21.5      # first read: RD takes 21.5
+    s.knx_telegram(10, "3/0/1", 22.0)
+    s.write_property(20, key, "present-value", 24.0, 8)
+    assert s.read_property(key, "relinquish-default") == 21.5  # never changed afterwards
+
+
+def test_subscribe_counts_as_first_read():
+    s = server_slot(16)
+    key = (AV, 6145)
+    s.knx_telegram(0, "3/0/1", 20.5)
+    s.subscribe_cov(1, "c", 1, key)
+    s.knx_telegram(2, "3/0/1", 23.0)
+    assert s.objects[key].relinquish_default == 20.5
+
+
+def test_command_above_the_controller_slot_masks_knx():
+    s = server_slot(16)
     key = (AV, 6145)
     s.knx_telegram(0, "3/0/1", 21.0)
     _, telegram, _ = s.write_property(10, key, "present-value", 24.0, 8)
     assert telegram == (10, "3/0/1", 24.0)              # the gateway writes the KNX group address
     s.knx_telegram(20, "3/0/1", 22.5)                   # room panel
     assert s.read_property(key, "present-value") == 24.0
-    assert s.read_property(key, "relinquish-default") == 22.5
+    pa = s.read_property(key, "priority-array")
+    assert pa[7] == 24.0 and pa[15] == 22.5             # the newer KNX value waits below
     s.write_property(30, key, "present-value", None, 8)
     assert s.read_property(key, "present-value") == 22.5
+
+
+def test_command_below_the_controller_slot_does_nothing():
+    s = server_slot(8)
+    key = (AV, 6145)
+    s.knx_telegram(0, "3/0/1", 21.0)
+    res, telegram, notes = s.write_property(10, key, "present-value", 24.0, 16)
+    assert res == "ack" and telegram is None and notes == []
+    assert s.read_property(key, "present-value") == 21.0
+    s.knx_telegram(20, "3/0/1", 22.5)
+    assert s.read_property(key, "present-value") == 22.5
+    pa = s.read_property(key, "priority-array")
+    assert pa[7] == 22.5 and pa[15] == 24.0
+
+
+def test_command_in_the_controller_slot_falls_back_to_relinquish_default():
+    s = server_slot(8)
+    key = (AV, 6145)
+    s.knx_telegram(0, "3/0/1", 21.0)
+    s.read_property(key, "present-value")               # commissioning read: RD = 21.0
+    s.knx_telegram(5, "3/0/1", 22.5)                    # room panel
+    s.write_property(10, key, "present-value", 24.0, 8)
+    assert s.read_property(key, "present-value") == 24.0
+    s.knx_telegram(15, "3/0/1", 23.0)                   # last writer wins in a shared slot
+    assert s.read_property(key, "present-value") == 23.0
+    _, telegram, _ = s.write_property(20, key, "present-value", None, 8)
+    # the relinquish empties the shared slot: the value falls back to the frozen RD, not 23.0
+    assert s.read_property(key, "present-value") == 21.0
+    assert telegram == (20, "3/0/1", 21.0)
 
 
 # ------------------------------------------------------------ COV
@@ -235,5 +300,8 @@ def test_saving_cov_settings_cancels_subscriptions_and_resets_priority_arrays():
     assert s.active_subscriptions(3) == 0
     assert s.read_property(sp, "priority-array") == [None] * 16
     assert s.read_property(sp, "cov-increment") == 0.5
+    # neither the command 24.0 nor the KNX value: the frozen value of the first read
+    assert s.read_property(sp, "present-value") == 21.0
     assert s.knx_telegram(4, "1/0/1", 1.0) == []            # nobody hears it
     assert s.knx_telegram(5, "3/0/1", 23.0) == []
+    assert s.read_property(sp, "present-value") == 23.0     # the next telegram refills the slot

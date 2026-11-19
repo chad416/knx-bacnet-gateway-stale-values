@@ -2,21 +2,28 @@
 
 What is modelled (sources in docs/SOURCES.md, assumptions in DOSSIER.md section 7.1):
 
-* Export rules (B1): only group objects with the export flag are visible; binary datapoint
-  types become Binary Value objects, numeric ones Analog Value objects, other types are not
-  exported. Instance number = group address read as a 16-bit number.
-* Export limit of the small controller variant: 150 objects (assumption A1). Which objects
-  are dropped when there are more is not documented; the model keeps the lowest instance
+* Export rules (G1, B1): only group objects with the export flag are visible; binary
+  datapoint types become Binary Value objects, numeric ones Analog Value objects, other
+  types are not exported. Instance number = group address read as a 16-bit number (B1;
+  the controller's own guide does not state it, assumption A15).
+* Export limit of the small controller variant: 150 objects (G1). Which objects are
+  dropped when there are more is not documented; the model keeps the lowest instance
   numbers (assumption A2).
-* Commandable Present_Value with a 16-slot priority array and Relinquish_Default (B4, B5).
-  KNX telegrams update Relinquish_Default; a BACnet command in any slot masks them
-  (assumption A4).
-* COV (B2, B3, B5): per-object COV increment, default 1 (assumption A3); an analog object
-  reports when |PV - PV at last report| >= increment, a binary object on every change; a new
-  or renewed subscription is answered with an immediate notification; a subscription with a
-  lifetime expires, lifetime 0 never expires.
-* Saving the COV settings cancels all subscriptions and resets all priority arrays
-  (assumption A5).
+* Commandable Present_Value with a 16-slot priority array (B4, B2). The controller writes
+  each KNX value into one configurable slot, its "object priority" (G2). Relinquish_Default
+  is set once, to the object's value at its first read by a client, and never changed
+  afterwards (G2). Which slot is the default is not documented (assumption A4). A change of
+  Present_Value caused by a BACnet write is sent to the group address, and the sent value
+  becomes the controller's own KNX value, so it also lands in the controller's slot
+  (assumption A16).
+* COV (B2, B3, B5): per-object COV increment, default 1 (G3); an analog object reports when
+  |PV - PV at last report| >= increment, a binary object on every change; a new or renewed
+  subscription is answered with an immediate notification; a subscription with a lifetime
+  expires, lifetime 0 never expires.
+* Saving the COV settings cancels all subscriptions and resets the priority arrays of all
+  objects (G3). The model empties all 16 slots, the controller's own slot included, so
+  Present_Value falls back to the frozen Relinquish_Default until the next KNX telegram
+  (my reading of G3, assumption A5).
 
 Messages are counted, not encoded. No conformance to the BACnet standard is claimed.
 """
@@ -28,8 +35,9 @@ from . import knx
 
 AV, BV, DEVICE = "analog-value", "binary-value", "device"
 N_PRIORITIES = 16
-DEFAULT_COV_INCREMENT = 1.0          # assumption A3
-SMALL_EXPORT_LIMIT = 150             # assumption A1
+DEFAULT_COV_INCREMENT = 1.0          # G3
+SMALL_EXPORT_LIMIT = 150             # G1
+DEFAULT_KNX_PRIORITY = 16            # slot the controller writes KNX values to; default not documented (A4)
 MAX_SUBSCRIPTIONS = 256              # B1: default number of COV subscriptions
 DEVICE_INSTANCE_MAX = 4194302        # B6: 4194303 is the wildcard
 
@@ -74,7 +82,7 @@ class BObject:
     instance: int
     name: str
     ga: str
-    relinquish_default: float = 0.0
+    relinquish_default: float | None = None   # None until the first read by a client (G2)
     priority_array: list = field(default_factory=lambda: [None] * N_PRIORITIES)
     cov_increment: float = DEFAULT_COV_INCREMENT
     last_reported: float | None = None
@@ -88,7 +96,7 @@ class BObject:
         for v in self.priority_array:        # slot 1 (index 0) is the highest priority
             if v is not None:
                 return v
-        return self.relinquish_default
+        return 0.0 if self.relinquish_default is None else self.relinquish_default
 
     def cov_due(self) -> bool:
         pv = self.present_value
@@ -125,10 +133,14 @@ class Notification:
 
 class BacnetServer:
     def __init__(self, device_instance: int, address: str, objects: list[KnxObject],
-                 limit: int | None = SMALL_EXPORT_LIMIT, model_name: str = "small"):
+                 limit: int | None = SMALL_EXPORT_LIMIT, model_name: str = "small",
+                 knx_priority: int = DEFAULT_KNX_PRIORITY):
         if not 0 <= device_instance <= DEVICE_INSTANCE_MAX:
             raise ValueError("device instance out of range")
+        if not 1 <= knx_priority <= N_PRIORITIES:
+            raise ValueError("knx_priority must be 1..16")
         self.device_instance = device_instance
+        self.knx_priority = knx_priority
         self.address = address
         self.limit = limit
         self.model_name = model_name
@@ -158,8 +170,9 @@ class BacnetServer:
             key = (bacnet_type(o.dpt), knx.ga_to_instance(o.ga))
             obj = self.objects.get(key)
             if obj is None or obj.ga != o.ga:
-                obj = BObject(key[0], key[1], o.name, o.ga,
-                              relinquish_default=self.knx_value.get(o.ga, 0.0))
+                obj = BObject(key[0], key[1], o.name, o.ga)
+                if o.ga in self.knx_value:                      # the object holds its KNX value
+                    obj.priority_array[self.knx_priority - 1] = self.knx_value[o.ga]
             obj.name = o.name
             obj.cov_increment = o.cov_increment
             new[key] = obj
@@ -176,8 +189,17 @@ class BacnetServer:
         obj = self.by_ga.get(ga)
         if obj is None:
             return []
-        obj.relinquish_default = value                          # assumption A4
+        obj.priority_array[self.knx_priority - 1] = value      # G2: the controller's own slot
         return self._cov_check(t, obj)
+
+    def _first_read(self, obj: BObject) -> None:
+        """G2: "The controller writes to the Relinquish Default (RD) property by first reading
+        (upload from BMS) only. It takes the current value of the object. The value of the RD
+        property cannot be changed afterward." The current value is taken as the controller's
+        KNX value of the object; in every simulated case this equals Present_Value, because
+        the first read happens at commissioning, before any BACnet command."""
+        if obj.relinquish_default is None:
+            obj.relinquish_default = self.knx_value.get(obj.ga, obj.present_value)
 
     # ---------------------------------------------------------- services
     def who_is(self, low: int | None = None, high: int | None = None) -> tuple[int, str] | None:
@@ -203,6 +225,7 @@ class BacnetServer:
         obj = self.objects.get(key)
         if obj is None:
             return self._err(UNKNOWN_OBJECT)
+        self._first_read(obj)
         if prop == "present-value":
             return obj.present_value
         if prop == "priority-array":
@@ -237,11 +260,11 @@ class BacnetServer:
         after = obj.present_value
         telegram = None
         if after != before:
-            # the gateway writes the resolved value to the group address; it hears its own
-            # telegram, so Relinquish_Default follows (assumption A4)
+            # the gateway sends the resolved value to the group address, and the sent value
+            # becomes its own KNX value, so it lands in the controller's slot (assumption A16)
             telegram = (t, obj.ga, after)
             self.knx_value[obj.ga] = after
-            obj.relinquish_default = after
+            obj.priority_array[self.knx_priority - 1] = after
         return "ack", telegram, self._cov_check(t, obj)
 
     def subscribe_cov(self, t: float, subscriber: str, process_id: int, key: tuple[str, int],
@@ -252,6 +275,7 @@ class BacnetServer:
         obj = self.objects.get(key)
         if obj is None:
             return self._err(UNKNOWN_OBJECT), []
+        self._first_read(obj)                       # the initial notification uploads the value
         sk = (subscriber, process_id, key)
         if sk not in self.subs:
             self._expire(t)
@@ -268,8 +292,10 @@ class BacnetServer:
 
     # ---------------------------------------------------------- configuration actions
     def save_cov_settings(self, increments: dict[str, float] | None = None) -> None:
-        """Changing and saving COV increments: all subscriptions are cancelled and all
-        priority arrays are reset (assumption A5, from the controller documentation)."""
+        """Changing and saving COV increments: all subscriptions are cancelled and the priority
+        arrays of all objects are reset (G3). All 16 slots are emptied, the controller's own
+        slot included (assumption A5), so Present_Value is the frozen Relinquish_Default until
+        the next KNX telegram. The reset is not sent to KNX (nothing documents that it is)."""
         for o in self.config:
             if increments and o.ga in increments:
                 o.cov_increment = increments[o.ga]
