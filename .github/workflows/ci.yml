@@ -1,0 +1,44 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Tests (includes the README number check against results/summary.json)
+        run: python -m pytest -q
+      - name: README numbers come from summary.json
+        run: python scripts/check_readme_numbers.py
+      - name: Results script (reduced run) and checks on its output
+        run: |
+          python scripts/run_all.py --quick
+          python - <<'PY'
+          import json
+          d = json.load(open("results/summary_quick.json"))
+          # no certain verdict of the diagnosis engine is wrong
+          for level, v in d["diagnosis"]["certain_verdicts"].items():
+              assert v["wrong"] == 0, (level, v)
+          # with all evidence every class is ranked first in most runs
+          for f, r in d["diagnosis"]["recall"]["E4"].items():
+              assert r >= 0.8, (f, r)
+          # COV rule reproduces the random-walk first-exit rate
+          for r in d["cov"]["brownian_check"]:
+              assert abs(r["relative_error"]) < 0.25, r
+          print("checks passed")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-quick
+          path: results/summary_quick.json
