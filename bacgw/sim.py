@@ -225,8 +225,11 @@ class Installation:
         below = sum(1 for o in self.gw.exportable() if knx.ga_to_instance(o.ga) < tinst)
         n_add = max(0, SMALL_EXPORT_LIMIT - below) + self.rng.randint(1, 20)
         for j in range(n_add):
-            main = self.rng.randrange(0, (tinst >> 11) + 1)
-            ga = self._free_ga(main, used, below=tinst)
+            while True:                       # any free address below the target's
+                ga = knx.instance_to_ga(self.rng.randrange(1, tinst))
+                if ga not in used and ga.split("/")[2] != "0":
+                    used.add(ga)
+                    break
             o = KnxObject(f"added {j + 1:03d}", ga, "1.001", True, 1.0)
             self.objs.append(o)
         self.gw.apply_config()

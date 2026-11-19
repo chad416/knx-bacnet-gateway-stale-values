@@ -15,6 +15,7 @@ strong evidence that another class would need a coincidence to produce. "possibl
 """
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass, field
 
@@ -111,6 +112,19 @@ def device_silence(ev) -> tuple[float, float]:
     return t_sil, p
 
 
+def device_gap(ev) -> tuple[float, float, float]:
+    """Longest stretch with no update on any point that ended before the window end:
+    (start, end, chance that it is a coincidence). The silence still running at the end is
+    handled by device_silence."""
+    times = sorted(t for lg in ev.history.values() for t, _ in lg.updates if t > 60)
+    if len(times) < 10:
+        return 0.0, 0.0, 1.0
+    gaps = [(b - a, a, b) for a, b in zip(times, times[1:])]
+    g, a, b = max(gaps)
+    lam = (len(times) - 1) / max(1.0, (times[-1] - times[0]) - g)
+    return a, b, math.exp(-lam * g)
+
+
 def features(ev) -> dict:
     tp = ev.points[ev.target]
     lg = ev.history[ev.target]
@@ -123,6 +137,8 @@ def features(ev) -> dict:
     f["poll"] = poll_interval_guess(ev)
     f["bursts"] = renewal_bursts(ev)
     f["t_sil"], f["p_sil"] = device_silence(ev)
+    f["gap_a"], f["gap_b"], f["p_gap"] = device_gap(ev)
+    f["gap_renewed"] = any(abs(t - f["gap_b"]) < 2.0 for t in f["bursts"])
     steps = [abs(b[1] - a[1]) for a, b in zip(ups, ups[1:]) if b[1] != a[1]]
     f["steps"] = steps
     # value changed between consecutive polls (share of polls)
@@ -171,6 +187,12 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                   f"all points silent since t = {f['t_sil']:.0f} s (chance {f['p_sil']:.1e})")
             b.add("COV_LIFETIME_EXPIRED", 1.0 if renews else 2.1,
                   "all points silent at the same time" + ("; client was seen renewing" if renews else ""))
+        healed = (not silent_long and f["p_gap"] < 1e-3 and f["gap_b"] - f["gap_a"] > 900
+                  and f["gap_renewed"] and f["poll"] is None)
+        if healed:
+            b.add("COV_SUB_LOST_SAVE", 2.5, f"all points silent from t = {f['gap_a']:.0f} s to "
+                                            f"{f['gap_b']:.0f} s, then all updated together (client renewal)")
+            b.add("COV_LIFETIME_EXPIRED", 0.5, "a common silence that ended with a renewal")
         if f["cmd_active"] and f["last_value"] == f["cmd_value"]:
             b.add("PRIORITY_STUCK", 2.5, f"BMS command {f['cmd_value']} at t = {f['cmd_t']:.0f} s never relinquished")
         if analog and f["kind"] in ("temperature", "setpoint") and f["poll"] is None and not silent_long:
@@ -302,30 +324,30 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
 
     cfg = ev.client
     if cfg.mode == "cov":
-        # changes on the KNX side after the BMS's last update of each point
+        # KNX changes of at least the COV increment that the client never got (whole window,
+        # periods with a BMS command held on the point excluded)
         unseen_big, unseen_small = [], []
         for name, meta in ev.points.items():
             o = next((x for x in ev.config if x.name == name), None)
             lg = ev.history[name]
             if o is None or not lg.updates:
                 continue
-            t0, v0 = lg.updates[-1]
-            inc = o.cov_increment
-            for t, v in ((t, v) for t, g, v in ev.knx_monitor if g == o.ga and t > t0 + 1):
-                big = (v != v0) if meta["type"] == BV else abs(v - v0) >= inc
-                if big:
-                    unseen_big.append((name, t))
-                    break
-                elif name == ev.target and v != v0:
-                    unseen_small.append((t, v))
+            for t in unreported(ev, name, o, meta["type"]):
+                unseen_big.append((name, t))
+                break
+        if ev.history[ev.target].updates:
+            t0, v0 = ev.history[ev.target].updates[-1]
+            unseen_small = [(t, v) for t, v in mon_t if t > t0 + 1 and v != v0 and abs(v - v0) < cfg_obj.cov_increment]
         steps = sorted(abs(b2[1] - a[1]) for a, b2 in zip(mon_t, mon_t[1:]) if b2[1] != a[1])
         med_step = steps[len(steps) // 2] if steps else None
         if unseen_big and "COV_LIFETIME_EXPIRED" not in b.h:
             names = sorted({n for n, _ in unseen_big})
             if len(names) >= 2:
-                b.add("COV_SUB_LOST_SAVE", 10.0, f"{len(names)} points changed on KNX by at least their COV "
-                                                 "increment with no notification, while the client's "
-                                                 "subscriptions are valid and the objects exist", "certain")
+                t_first = min(t for _, t in unseen_big)
+                b.add("COV_SUB_LOST_SAVE", 10.0, f"{len(names)} points changed on KNX by more than their COV "
+                                                 f"increment allows with no notification (first at t = {t_first:.0f} s), "
+                                                 "while the client's subscriptions were valid and the objects "
+                                                 "exist", "certain")
                 b.drop({"COV_INC_COARSE", "HEALTHY"}, "")
         elif unseen_small and med_step is not None and cfg_obj.cov_increment > med_step and not unseen_big:
             b.add("COV_INC_COARSE", 10.0, f"KNX value moved {len(unseen_small)} times after the last "
@@ -359,6 +381,41 @@ def diagnose(ev, level: str) -> list[Hypothesis]:
                 b.add("HEALTHY", 10.0, f"polling every {cfg.poll_interval:.0f} s, direct read equals the "
                                        "last KNX value, object exported, one device, no command held", "certain")
     return b.ranked()
+
+
+def _held(ev, name):
+    """Intervals in which a BMS command was held in the point's priority array."""
+    out, start = [], None
+    for t, n, v, prio, res in ev.commands:
+        if n != name:
+            continue
+        if v is not None and start is None:
+            start = t
+        elif v is None and start is not None:
+            out.append((start, t))
+            start = None
+    if start is not None:
+        out.append((start, ev.t_end))
+    return out
+
+
+def unreported(ev, name, o, otype) -> list[float]:
+    """Times of KNX changes on the point's group address after which the client's value
+    differed from the KNX value by at least twice the COV increment (any change for binary)."""
+    ups = ev.history[name].updates
+    times = [t for t, _ in ups]
+    held = _held(ev, name)
+    out = []
+    for t, g, v in ev.knx_monitor:
+        if g != o.ga or t < times[0] or any(a - 1 <= t <= b + 1 for a, b in held):
+            continue
+        i = bisect.bisect_right(times, t + 1e-6) - 1      # notifications carry the telegram time
+        shown = ups[i][1]
+        # a renewal shows the current value without moving the server's reference, so a
+        # working subscription keeps |value - shown| below twice the increment (premise P3)
+        if (v != shown) if otype == BV else abs(v - shown) >= 2 * o.cov_increment - 1e-9:
+            out.append(t)
+    return out
 
 
 def top(ev, level: str) -> tuple[str, str]:
